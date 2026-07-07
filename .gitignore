@@ -161,3 +161,9 @@ Thumbs.db
 captures/
 *.task
 image.jpg
+
+
+# ONNX
+*.onnx
+*.onnx.data
+*.engine

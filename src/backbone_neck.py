@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from src.blocks import Conv, C2f, SPPF
+from src.blocks import Conv, C2f, SPPF, C2fPSA
 
 class Backbone(nn.Module):
     """
@@ -31,7 +31,8 @@ class Backbone(nn.Module):
         )
         self.stage4 = nn.Sequential(
             Conv(c3, c4, 3, 2),                              # 30 -> 15 (P5)
-            C2f(c4, c4, n=n[3], shortcut=True),
+            C2fPSA(c4, c4, n=n[3], e=0.5),
+            # C2f(c4, c4, n=n[3], shortcut=True),
             SPPF(c4, c4, k=5),
         )
 
@@ -42,7 +43,6 @@ class Backbone(nn.Module):
         p4 = self.stage3(p3)
         p5 = self.stage4(p4)
         return p3, p4, p5
-
 
 class PAFPN(nn.Module):
     """Path Aggregation FPN: top-down rồi bottom-up, giống YOLOv8/v10 neck."""

@@ -1,7 +1,6 @@
 import torch
-from model import NMSFreeDetector
-from train.loss import DetectionLoss
-
+from src.model import NMSFreeDetector
+from src.train.loss import DetectionLoss
 
 def make_fake_gt(B, M, nc, img_size=480, device="cpu"):
     gt_boxes = torch.zeros(B, M, 4, device=device)
@@ -37,7 +36,6 @@ def inference_nms_free(preds, conf_thres=0.3, max_det=100):
         out = torch.cat([bx, l.unsqueeze(-1).float(), s.unsqueeze(-1)], -1)  # [x1,y1,x2,y2,cls,score]
         results.append(out)
     return results
-
 
 def main():
     torch.manual_seed(0)

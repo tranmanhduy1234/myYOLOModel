@@ -3,11 +3,9 @@ import torch.nn as nn
 from src.backbone_neck import Backbone, PAFPN
 from src.head import DetectHead
 
-
 class NMSFreeDetector(nn.Module):
     """
     Backbone + Neck + Head.
-
     QUAN TRONG (giai doan pretrain -> sau nay doi HEAD):
     Model duoc coi la 2 phan tach biet ve mat checkpoint:
       - "trunk"  = backbone + neck  (phan muon giu lai / truyen sang task moi)
@@ -89,20 +87,40 @@ class NMSFreeDetector(nn.Module):
             p.requires_grad_(not freeze)
         return self
 
-
 if __name__ == "__main__":
-    m = NMSFreeDetector(nc=80).to("cuda")
+    m = NMSFreeDetector(nc=80).to("cuda").eval()
     n_params = sum(p.numel() for p in m.parameters())
     print(f"Tong tham so: {n_params:,} ({n_params/1e6:.2f}M)")
     import time
-    x = torch.randn(2, 3, 480, 480).to("cuda")
-    start = time.time()
-    for i in range(0, 100):
-        out = m(x)
-    end = time.time()
-    print(end - start)
+    x = torch.randn(5, 3, 480, 480).to("cuda")
+    with torch.inference_mode():
+        start = time.time()
+        for i in range(0, 100):
+            out = m(x)
+        end = time.time()
+        print(end - start)
     
     print("o2o cls:", out["o2o"]["cls"].shape)   # (B, A, nc)
     print("o2o box:", out["o2o"]["box"].shape)   # (B, A, 4)
     print("anchors:", out["anchors"].shape)
     print("A (tong so anchor points) =", out["anchors"].shape[0], "= 60*60+30*30+15*15 =", 60*60+30*30+15*15)
+    
+# 1. Chuyển mô hình sang chế độ eval và ÉP SANG FP16 (HALF PRECISION)
+    m.eval().half()
+
+    # 2. Tạo dữ liệu mẫu cũng phải ở định dạng dạng .half() mới khớp mạng
+    dummy_input = torch.randn(5, 3, 480, 480).to("cuda").half()
+    onnx_filename = "yolov10_custom_fp16.onnx"
+
+    print("Đang xuất mô hình sang định dạng ONNX FP16 xịn...")
+    torch.onnx.export(
+        m,
+        dummy_input,
+        onnx_filename,
+        verbose=False,
+        opset_version=18,             # Giữ nguyên opset 18 chuẩn hóa
+        input_names=["images"],        
+        output_names=["cls", "box", "reg_raw", "anchors", "strides"], 
+        do_constant_folding=True       
+    )
+    print(f"Xuất ONNX FP16 thành công! File mới: {onnx_filename}")
