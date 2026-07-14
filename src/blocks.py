@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-
+import math
 
 def autopad(k, p=None, d=1):
     if d > 1:
@@ -10,7 +10,6 @@ def autopad(k, p=None, d=1):
     return p
 
 class Conv(nn.Module):
-    """Conv2d + BN + SiLU (khối cơ bản kiểu YOLO)."""
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
         super().__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
@@ -20,14 +19,11 @@ class Conv(nn.Module):
         return self.act(self.bn(self.conv(x)))
 
 class DWConv(Conv):
-    """Depthwise conv - dùng trong head để giảm tham số."""
-
     def __init__(self, c1, c2, k=1, s=1, act=True):
         super().__init__(c1, c2, k, s, g=1, act=act)
-        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k), groups=min(c1, c2), bias=False)
-
+        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k), groups=math.gcd(c1, c2), bias=False)
+        
 class Bottleneck(nn.Module):
-    """Khối này thực hiện nhiệm vụ trích xuất đặc trưng sâu (deep features) thông qua cơ chế thắt nút cổ chai (bottleneck)"""
     def __init__(self, c1, c2, shortcut=True, e=0.5):
         super().__init__()
         c_ = int(c2 * e)
@@ -54,6 +50,30 @@ class C2f(nn.Module):
         for m in self.m:
             y.append(m(y[-1]))
         return self.cv2(torch.cat(y, 1))
+
+class CIB(nn.Module):
+    def __init__(self, c1, c2, shortcut=True, e=0.5):
+        super().__init__()
+        c_ = int(c2 * e)  # kênh trung gian (hidden channels)
+        self.block = nn.Sequential(
+            Conv(c1, c1, 3, 1, g=c1),         
+            Conv(c1, 2 * c_, 1, 1),            
+            Conv(2 * c_, 2 * c_, 3, 1, g=2 * c_), 
+            Conv(2 * c_, c2, 1, 1),              
+            Conv(c2, c2, 3, 1, g=c2)
+        )
+        self.add = shortcut and c1 == c2
+
+    def forward(self, x):
+        return x + self.block(x) if self.add else self.block(x)
+
+class C2fCIB(C2f):
+    def __init__(self, c1, c2, n=1, shortcut=False, e=0.5):
+        super().__init__(c1, c2, n, shortcut, e)
+        self.m = nn.ModuleList(
+            CIB(self.c, self.c, shortcut=shortcut, e=1.0)
+            for _ in range(n)
+        )
 
 class SPPF(nn.Module):
     """Spatial Pyramid Pooling - Fast, mở rộng receptive field rẻ tiền."""
@@ -90,49 +110,118 @@ class DFL(nn.Module):
         return self.conv(x).view(b, 4, a)
     
 class Attention(nn.Module):
-    """Lớp Self-Attention thu gọn đã vá lỗi chia batch và tràn bộ nhớ."""
-    def __init__(self, dim, num_heads=4):
+    def __init__(
+        self,
+        dim,
+        num_heads=4,
+        mlp_ratio=2.0,
+        layer_scale=1e-2,
+    ):
         super().__init__()
+
+        assert dim % num_heads == 0
+
         self.num_heads = num_heads
-        self.scale = (dim // num_heads) ** -0.5
-        self.qkv = nn.Conv2d(dim, dim * 3, 1, bias=False)
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim ** -0.5
+
+        # QKV Projection
+        self.qkv = nn.Conv2d(dim, dim * 3, kernel_size=1, bias=False)
+
+        # Output Projection
         self.proj = Conv(dim, dim, 1, 1, act=False)
+
+        # Feed Forward Network
+        hidden_dim = int(dim * mlp_ratio)
+        self.ffn = nn.Sequential(
+            Conv(dim, hidden_dim, 1, 1),
+            Conv(hidden_dim, dim, 1, 1, act=False),
+        )
+
+        # LayerScale (optional)
+        self.gamma1 = nn.Parameter(layer_scale * torch.ones(dim))
+        self.gamma2 = nn.Parameter(layer_scale * torch.ones(dim))
 
     def forward(self, x):
         B, C, H, W = x.shape
         N = H * W
-        # qkv shape ban đầu: (B, 3, num_heads, head_dim, N)
-        qkv = self.qkv(x).view(B, 3, self.num_heads, C // self.num_heads, N)
-        
-        # FIX LỖI 1: Dùng .unbind(1) để rã tensor theo chiều dimension 1 (nơi chứa đúng 3 phần tử Q, K, V)
-        q, k, v = qkv.unbind(1) # Mỗi tensor tách ra sẽ có shape chuẩn: (B, num_heads, head_dim, N)
+        qkv = self.qkv(x).reshape(
+            B, 3, self.num_heads, self.head_dim, N
+        )
+        q, k, v = qkv.unbind(1)
 
-        # Tính toán ma trận tự chú ý không gian
-        attn = (q.transpose(-2, -1) @ k) * self.scale # Shape: (B, num_heads, N, N)
+        q = q.transpose(-2, -1)        # (B,h,N,d)
+        k = k                          # (B,h,d,N)
+        attn = (q @ k) * self.scale
         attn = attn.softmax(dim=-1)
+        v = v.transpose(-2, -1)        # (B,h,N,d)
 
-        # FIX LỖI 2: Thêm .contiguous() trước khi .view() để làm mượt lại các ô nhớ trên RAM/VRAM
-        x_attn = (v @ attn.transpose(-2, -1)).contiguous().view(B, C, H, W)
-        
-        return self.proj(x_attn)
+        out = attn @ v                 # (B,h,N,d)
+        out = out.transpose(-2, -1).reshape(B, C, H, W)
+        out = self.proj(out)
+
+        x = x + self.gamma1.view(1, -1, 1, 1) * out
+        x = x + self.gamma2.view(1, -1, 1, 1) * self.ffn(x)
+        return x
 
 class C2fPSA(nn.Module):
-    """Khối C2f tích hợp Partial Self-Attention đặc trưng của YOLOv10."""
     def __init__(self, c1, c2, n=1, e=0.5):
         super().__init__()
+
         self.c = int(c2 * e)
         self.cv1 = Conv(c1, 2 * self.c, 1, 1)
         self.cv2 = Conv(2 * self.c, c2, 1, 1)
-        self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut=True, e=1.0) for _ in range(n))
-        self.attn = Attention(self.c)
+        self.m = nn.Sequential(
+            *[Bottleneck(self.c, self.c, shortcut=True, e=1.0) for _ in range(n)]
+        )
 
+        self.attn = Attention(self.c)
     def forward(self, x):
-        # Mẹo toán học: Chẻ đôi số kênh màu làm 2 nhánh độc lập
         a, b = self.cv1(x).chunk(2, 1)
-        # Nhánh b được mài giũa qua các khối Bottleneck
-        for m in self.m:
-            b = m(b)
-        # CHÍNH NÓ: Áp dụng Self-Attention ĐƠN NHÁNH để tìm mối quan hệ toàn cục
-        b = b + self.attn(b)
-        # Ghép lại với nhánh gốc a và nén kênh về c2
+        b = self.m(b)
+        b = self.attn(b)
         return self.cv2(torch.cat((a, b), 1))
+
+class SCDown(nn.Module):
+    def __init__(self, c1, c2, k=3, s=1, p=None, g=1, d=1, act=True):
+        super().__init__()
+        activation = nn.SiLU(inplace=True) if act else nn.Identity()
+        if s == 1:
+            self.block = nn.Sequential(
+                nn.Conv2d(
+                    c1, c2,
+                    kernel_size=k,
+                    stride=1,
+                    padding=autopad(k, p, d),
+                    dilation=d,
+                    bias=False
+                ),
+                nn.BatchNorm2d(c2),
+                activation,
+            )
+        else:
+            self.block = nn.Sequential(
+                # Channel expansion (Pointwise)
+                nn.Conv2d(
+                    c1, c2,
+                    kernel_size=1,
+                    stride=1,
+                    bias=False
+                ),
+                nn.BatchNorm2d(c2),
+                activation,
+
+                nn.Conv2d(
+                    c2, c2,
+                    kernel_size=k,
+                    stride=s,
+                    padding=autopad(k, p, d),
+                    groups=c2,
+                    dilation=d,
+                    bias=False
+                ),
+                nn.BatchNorm2d(c2),
+                activation,
+            )
+    def forward(self, x):
+        return self.block(x)

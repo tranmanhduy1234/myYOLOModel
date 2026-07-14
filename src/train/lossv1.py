@@ -2,12 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 def bbox_iou_ciou(box1, box2, eps=1e-7):
     """box1: (N,4) box2: (N,4) xyxy, tra ve CIoU tung cap (N,)."""
     b1x1, b1y1, b1x2, b1y2 = box1.unbind(-1)
     b2x1, b2y1, b2x2, b2y2 = box2.unbind(-1)
-
+    
     inter_x1 = torch.max(b1x1, b2x1)
     inter_y1 = torch.max(b1y1, b2y1)
     inter_x2 = torch.min(b1x2, b2x2)
@@ -33,7 +32,6 @@ def bbox_iou_ciou(box1, box2, eps=1e-7):
     ciou = iou - (rho2 / c2 + alpha * v)
     return ciou.clamp(-1.0, 1.0)
 
-
 def bbox_iou_plain(box1, box2, eps=1e-7):
     """IoU thuong, dung lam metric matching (khong can dao ham on dinh nhu CIoU)."""
     b1x1, b1y1, b1x2, b1y2 = box1.unbind(-1)
@@ -47,7 +45,6 @@ def bbox_iou_plain(box1, box2, eps=1e-7):
     w2, h2 = (b2x2 - b2x1).clamp(0), (b2y2 - b2y1).clamp(0)
     union = w1 * h1 + w2 * h2 - inter + eps
     return inter / union
-
 
 class TaskAlignedAssigner:
     """
@@ -134,7 +131,6 @@ class TaskAlignedAssigner:
         target_scores = target_scores * fg_mask[..., None]
 
         return target_labels, target_boxes, target_scores, fg_mask
-
 
 class DetectionLoss(nn.Module):
     """

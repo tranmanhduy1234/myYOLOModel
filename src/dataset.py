@@ -6,7 +6,6 @@ from torch.utils.data import Dataset, Subset
 import numpy as np
 from PIL import Image, ImageEnhance
 
-
 def letterbox(img, img_size, fill=(114, 114, 114)):
     """
     Resize giu nguyen ty le khung hinh (khong meo anh), pad phan con lai
@@ -17,13 +16,12 @@ def letterbox(img, img_size, fill=(114, 114, 114)):
     scale = min(img_size / org_w, img_size / org_h)
     new_w, new_h = int(round(org_w * scale)), int(round(org_h * scale))
     img_resized = img.resize((new_w, new_h), Image.BILINEAR)
-
+    
     canvas = Image.new("RGB", (img_size, img_size), fill)
     pad_x = (img_size - new_w) // 2
     pad_y = (img_size - new_h) // 2
     canvas.paste(img_resized, (pad_x, pad_y))
     return canvas, scale, pad_x, pad_y
-
 
 class YOLOv10Dataset(Dataset):
     """
@@ -123,7 +121,7 @@ class YOLOv10Dataset(Dataset):
         anno = self.annotations[idx]
         image_name = anno["image_name"]
         img_path = os.path.join(self.images_dir, image_name)
-
+        
         if not os.path.exists(img_path):
             raise FileNotFoundError(f"Image not found at path: {img_path}")
         img = Image.open(img_path).convert("RGB")
@@ -200,7 +198,6 @@ def split_dataset(dataset, val_ratio=0.1, seed=42):
     val_idx = idx[:n_val]
     train_idx = idx[n_val:]
     return train_idx, val_idx
-
 
 def collate_fn(batch):
     """

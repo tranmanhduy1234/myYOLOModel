@@ -204,7 +204,6 @@ class FaceLandmarkDataset(Dataset):
             "orig_size": torch.tensor([orig_w, orig_h], dtype=torch.long),
         }
 
-
 def make_dataloader(
     root_dir: str,
     batch_size: int = 32,

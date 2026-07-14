@@ -3,14 +3,13 @@ from copy import deepcopy
 import torch
 import torch.nn as nn
 
-
 class ModelEMA:
     """
     Exponential Moving Average cua trong so model (kieu Ultralytics/YOLO).
     Model EMA thuong on dinh hon va cho ket qua eval/inference tot hon model
     "song" dang duoc optimizer cap nhat truc tiep, dac biet quan trong khi
     pretrain lau (nhieu step) truoc khi chuyen sang finetune voi head moi.
-
+    
     Cong thuc: ema = decay * ema + (1 - decay) * model
     decay duoc "warm up" dan theo so update (giong YOLOv5/v8) de EMA bam sat
     model that nhanh o nhung buoc dau, roi on dinh dan ve gan decay toi da.

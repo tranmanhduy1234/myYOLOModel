@@ -1,14 +1,13 @@
 from dataclasses import dataclass, field
 from typing import Tuple
 
-
 @dataclass
 class TrainConfig:
     # ---- Data ----
     data_dir: str = "./data"
     annotations_file: str = "annotations.jsonl"
     classes_file: str = "classes.jsonl"
-    img_size: int = 480
+    img_size: int = 640
     val_ratio: float = 0.1
     batch_size: int = 16
     num_workers: int = 4
@@ -17,9 +16,9 @@ class TrainConfig:
     # ---- Model ----
     nc: int = 80
     reg_max: int = 16
-    backbone_w: Tuple[int, int, int, int, int] = (38, 76, 152, 304, 608)
-    backbone_n: Tuple[int, int, int, int] = (1, 3, 3, 1)
-    neck_n: int = 1
+    backbone_w: Tuple[int, int, int, int, int] = (48, 96, 192, 384, 512)
+    backbone_n: Tuple[int, int, int, int] = (2, 4, 4, 2)
+    neck_n: int = 2
     strides: Tuple[int, int, int] = (8, 16, 32)
 
     # ---- Optim ----

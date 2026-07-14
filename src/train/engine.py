@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader, Subset
 
 from model import NMSFreeDetector
 from dataset import YOLOv10Dataset, collate_fn, split_dataset
-from train.loss import DetectionLoss
+from train.lossv1 import DetectionLoss
 from train.ema import ModelEMA
 
 # ----------------------------------------------------------------------
