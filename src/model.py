@@ -5,11 +5,11 @@ from src.head import DetectHead
 from src.config import TrainConfig
 
 class NMSFreeDetector(nn.Module):
-    def __init__(self, nc=TrainConfig.nc, reg_max=TrainConfig.reg_max,
-                  backbone_w=TrainConfig.backbone_w,
-                 backbone_n=TrainConfig.backbone_n,
-                 neck_n=TrainConfig.neck_n,
-                 strides=TrainConfig.strides):
+    def __init__(self, nc=TrainConfig().nc, reg_max=TrainConfig().reg_max,
+                  backbone_w=TrainConfig().backbone_w,
+                 backbone_n=TrainConfig().backbone_n,
+                 neck_n=TrainConfig().neck_n,
+                 strides=TrainConfig().strides):
         super().__init__()
         
         # Setting parameters
@@ -36,7 +36,10 @@ class NMSFreeDetector(nn.Module):
         return {
             "backbone": self.backbone.state_dict(),
             "neck": self.neck.state_dict(),
+            "head": self.head.state_dict(),
             "meta": {
+                "nc": self.nc,
+                "reg_max": self.reg_max,
                 "backbone_w": self.backbone_w,
                 "backbone_n": self.backbone_n,
                 "neck_n": self.neck_n,
@@ -48,33 +51,69 @@ class NMSFreeDetector(nn.Module):
     def save_trunk(self, path):
         torch.save(self.trunk_state_dict(), path)
 
-    def load_trunk(self, path_or_dict, strict=True, map_location="cuda"):
-        ckpt = path_or_dict if isinstance(path_or_dict, dict) else torch.load(path_or_dict, map_location=map_location)
+    def load_trunk(self, path_or_dict, strict=True, map_location="cpu"):
+        ckpt = (
+            path_or_dict
+            if isinstance(path_or_dict, dict)
+            else torch.load(path_or_dict, map_location=map_location)
+        )
+
         self.backbone.load_state_dict(ckpt["backbone"], strict=strict)
         self.neck.load_state_dict(ckpt["neck"], strict=strict)
-        return self
+        self.head.load_state_dict(ckpt["head"], strict=strict)
 
+        if "meta" in ckpt:
+            meta = ckpt["meta"]
+            self.nc = meta.get("nc", self.nc)
+            self.reg_max = meta.get("reg_max", self.reg_max)
+            self.backbone_w = meta.get("backbone_w", self.backbone_w)
+            self.backbone_n = meta.get("backbone_n", self.backbone_n)
+            self.neck_n = meta.get("neck_n", self.neck_n)
+            self.neck_chs = tuple(meta.get("neck_chs", self.neck_chs))
+            self.strides = tuple(meta.get("strides", self.strides))
+
+        return self
+    
+    # (BACKBONE)
+    def load_feature_extractor(self, path_or_dict, strict=True, map_location="cpu"):
+        ckpt = (
+            path_or_dict
+            if isinstance(path_or_dict, dict)
+            else torch.load(path_or_dict, map_location=map_location)
+        )
+        self.backbone.load_state_dict(ckpt["backbone"], strict=strict)
+        self.neck.load_state_dict(ckpt["neck"], strict=strict)
+
+        return self
+    
     def replace_head(self, nc=None, reg_max=None, strides=None):
         nc = self.nc if nc is None else nc
         reg_max = self.reg_max if reg_max is None else reg_max
         strides = self.strides if strides is None else strides
 
-        # Ke thua device & dtype hien tai cua model (vi du sau khi da .to('cuda') hoac .half()),
-        # neu khong head moi se luon mac dinh nam tren CPU/float32 -> gay loi mismatch device/dtype.
         ref_param = next(self.backbone.parameters())
-        device, dtype = ref_param.device, ref_param.dtype
 
         self.head = DetectHead(
-            chs=self.neck_chs, nc=nc, reg_max=reg_max, strides=strides
-        ).to(device=device, dtype=dtype)
-        self.nc, self.reg_max, self.strides = nc, reg_max, strides
+            chs=self.neck_chs,
+            nc=nc,
+            reg_max=reg_max,
+            strides=strides,
+        ).to(
+            device=ref_param.device,
+            dtype=ref_param.dtype,
+        )
+
+        self.nc = nc
+        self.reg_max = reg_max
+        self.strides = strides
+
         return self
 
-    def freeze_trunk(self, freeze=True):
-        for p in self.backbone.parameters():
-            p.requires_grad_(not freeze)
-        for p in self.neck.parameters():
-            p.requires_grad_(not freeze)
+    def freeze_trunk(self, freeze=True): 
+        for p in self.backbone.parameters(): 
+            p.requires_grad_(not freeze) 
+        for p in self.neck.parameters(): 
+            p.requires_grad_(not freeze) 
         return self
 
 if __name__ == "__main__":
@@ -84,11 +123,11 @@ if __name__ == "__main__":
     print(f"Total parameters: {n_params:,} ({n_params/1e6:.2f}M)")
 
     import time
-    x = torch.randn(5, 3, 640, 640).to("cuda")
+    x = torch.randn(1, 3, 480, 480).to("cuda")
     # Benchmark tốc độ inference
     with torch.inference_mode():
         start = time.time()
-        for _ in range(1):
+        for _ in range(100):
             out = m(x)
         end = time.time()
     print("Inference time:", end - start)
