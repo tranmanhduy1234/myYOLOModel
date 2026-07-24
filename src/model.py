@@ -3,6 +3,7 @@ import torch.nn as nn
 from src.backbone_neck import Backbone, PAFPN
 from src.head import DetectHead
 from src.config import TrainConfig
+from src.utils.init_weights import initialize_weights
 
 class NMSFreeDetector(nn.Module):
     def __init__(self, nc=TrainConfig().nc, reg_max=TrainConfig().reg_max,
@@ -25,6 +26,9 @@ class NMSFreeDetector(nn.Module):
         self.neck_chs = (c3, c4, c5)
         self.neck = PAFPN(chs=(c3, c4, c5), n=neck_n)
         self.head = DetectHead(chs=(c3, c4, c5), nc=nc, reg_max=reg_max, strides=strides)
+
+        # Khởi tạo trọng số toàn bộ mô hình
+        self._initialize_weights()
 
     def forward(self, x):
         p3, p4, p5 = self.backbone(x)
@@ -103,10 +107,23 @@ class NMSFreeDetector(nn.Module):
             dtype=ref_param.dtype,
         )
 
+        # Khởi tạo trọng số cho head mới
+        initialize_weights(self.head)
+
         self.nc = nc
         self.reg_max = reg_max
         self.strides = strides
 
+        return self
+
+    def _initialize_weights(self):
+        """Khởi tạo trọng số theo chuẩn YOLO:
+        - Conv2d:      Kaiming Normal (fan_out)
+        - BatchNorm2d: gamma=1, beta=0, eps=1e-3, momentum=0.03
+        - Head bias:   Focal prior (cls), constant 1.0 (reg)
+        - DFL:         Giữ nguyên (frozen, không init lại)
+        """
+        initialize_weights(self)
         return self
 
     def freeze_trunk(self, freeze=True): 
@@ -127,7 +144,7 @@ if __name__ == "__main__":
     # Benchmark tốc độ inference
     with torch.inference_mode():
         start = time.time()
-        for _ in range(100):
+        for _ in range(1):
             out = m(x)
         end = time.time()
     print("Inference time:", end - start)

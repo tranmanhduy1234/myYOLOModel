@@ -95,6 +95,14 @@ class TrainConfig:
     ema_decay: float = 0.9998
     ema_warmup_updates: int = 2000
 
+    # ---- TensorBoard / Logging ----
+    tb_log_dir: str = "runs"      # Thư mục lưu log TensorBoard
+    log_dir: str = "./logs"       # Thư mục lưu file .log (text logging)
+    run_name: str = "train"       # Tiền tố tên file .log (train_{timestamp}.log)
+    log_gradients: bool = True    # Log gradient histogram & RMSNorm
+    log_weights: bool = True      # Log weight/bias histogram, STD & RMSNorm
+    log_hist_interval: int = 100  # Số step giữa 2 lần log histogram (tránh log quá dày làm chậm/nặng)
+
     # ---- Runtime ----
     device: str = "cuda"          # sẽ tự fallback về cpu nếu không có GPU
     amp: bool = True              # mixed precision

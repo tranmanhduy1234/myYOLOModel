@@ -1,0 +1,12 @@
+graph TD
+    TOTAL["Total Loss L_total"]
+    TOTAL -->|w_o2m = 1.0| O2M_BRANCH["Loss Nhánh One-to-Many L_o2m<br/>(topk = 10)"]
+    TOTAL -->|w_o2o = 1.0| O2O_BRANCH["Loss Nhánh One-to-One L_o2o<br/>(topk = 1, NMS-Free)"]
+
+    O2M_BRANCH -->|cls_gain = 1.0| BCE_O2M["BCE Classification Loss"]
+    O2M_BRANCH -->|box_gain = 7.5| CIOU_O2M["CIoU Bounding Box Loss"]
+    O2M_BRANCH -->|dfl_gain = 1.5| DFL_O2M["Distribution Focal Loss (DFL)"]
+
+    O2O_BRANCH -->|cls_gain = 1.0| BCE_O2O["BCE Classification Loss"]
+    O2O_BRANCH -->|box_gain = 7.5| CIOU_O2O["CIoU Bounding Box Loss"]
+    O2O_BRANCH -->|dfl_gain = 1.5| DFL_O2O["Distribution Focal Loss (DFL)"]

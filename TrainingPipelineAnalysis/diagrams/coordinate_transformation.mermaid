@@ -1,0 +1,26 @@
+graph LR
+    subgraph PIXEL_SPACE ["Khung Tọa Độ [PIXEL] (0 -> imgsz)"]
+        GT_BBOX_PIXEL["Ground Truth Bounding Box<br/>(x1, y1, x2, y2) trong pixel"]
+        PRED_BBOX_PIXEL["Predicted Box Decoded<br/>(x1, y1, x2, y2) trong pixel"]
+        ANCHOR_PIXEL["Anchor Points Pixel<br/>anc_points * stride"]
+        TAL["Task-Aligned Assigner (TAL)<br/>m = s^alpha * IoU^beta"]
+    end
+
+    subgraph GRID_SPACE ["Khung Tọa Độ [GRID] (0 -> feature_map_dim)"]
+        PRED_BBOX_GRID["Predicted Box Grid<br/>box_pixel / stride"]
+        TARGET_BBOX_GRID["Target Box Grid<br/>target_pixel / stride"]
+        ANCHOR_GRID["Anchor Points Grid<br/>(gx + 0.5, gy + 0.5)"]
+        BBOX_LOSS["BboxLoss (CIoU + DFL)<br/>DFL discretizes 0..reg_max-1 grid cells"]
+    end
+
+    GT_BBOX_PIXEL --> TAL
+    PRED_BBOX_PIXEL --> TAL
+    ANCHOR_PIXEL --> TAL
+
+    TAL -->|target_bboxes_pixel| TRANSITION["Quy đổi Tọa độ:<br/>GRID = PIXEL / stride"]
+    TRANSITION --> TARGET_BBOX_GRID
+    PRED_BBOX_PIXEL -->|/ stride| PRED_BBOX_GRID
+
+    PRED_BBOX_GRID --> BBOX_LOSS
+    TARGET_BBOX_GRID --> BBOX_LOSS
+    ANCHOR_GRID --> BBOX_LOSS

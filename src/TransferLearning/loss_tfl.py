@@ -80,7 +80,6 @@ def normalized_wing_loss(pred, target, w=0.10, epsilon=0.02):
     C = w - w * math.log(1 + w / epsilon)
     return torch.where(diff < w, w * torch.log(1 + diff / epsilon), diff - C)
 
-
 def landmark_regression_loss(pred_norm, target_norm, loss_type="smooth_l1", beta=0.05):
     """
     pred_norm, target_norm: cung shape (..., ) trong [0,1] (xap xi).
