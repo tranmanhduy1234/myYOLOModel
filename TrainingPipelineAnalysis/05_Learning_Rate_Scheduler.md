@@ -4,7 +4,7 @@
 
 Trong quá trình huấn luyện mô hình Học sâu, **Tốc độ Học (Learning Rate - LR)** được coi là siêu tham số nhạy cảm và quan trọng nhất. Một Tốc độ Học quá lớn ở giai đoạn đầu có thể khiến mô hình bị bùng nổ loss và phân kỳ; ngược lại, một Tốc độ Học không giảm ở giai đoạn cuối sẽ làm cho các tham số bị dao động liên tục quanh điểm cực tiểu mà không thể hội tụ (Overshooting).
 
-Dự án cài đặt một chiến lược điều phối Tốc độ Học mượt mà kết hợp giữa **Khởi động Tuyến tính (Linear Warmup)** và **Suy giảm Cosine (Cosine Annealing Decay)** theo từng step lặp (Per-step Decay), được định nghĩa trong hàm `lr_lambda_factory` tại tệp [`src/train/engine.py`](file:///home/tranmanhduy/Workspace/ptithcm/TTTN/CNNModel/src/train/engine.py#L102-L114).
+Dự án cài đặt một chiến lược điều phối Tốc độ Học mượt mà kết hợp giữa **Khởi động Tuyến tính (Linear Warmup)** và **Suy giảm Cosine (Cosine Annealing Decay)** theo từng step lặp (Per-step Decay), được định nghĩa trong hàm `lr_lambda_factory` tại tệp [`src/train/engine.py`](file:///home/tranmanhduy/Workspace/ptithcm/TTTN/CNNModel/src/train/engine.py#L97-L110).
 
 Chương này trình bày chi tiết cơ sở toán học, công thức tính toán bước lặp, sự thay đổi tốc độ học theo thời gian, và tương tác giữa LR Scheduler với cơ chế an toàn AMP.
 

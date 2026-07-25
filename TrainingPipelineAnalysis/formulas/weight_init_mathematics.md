@@ -68,4 +68,10 @@ Ví dụ với $H_{\text{img}} = 640, N_{\text{cls}} = 80$:
 - P5 ($S=32 \implies \text{grid} = 20 \times 20 = 400$):
   $$b_{\text{cls}}(32) = \ln\left(\frac{5}{80 \times 400}\right) = \ln\left(\frac{5}{32000}\right) \approx -8.7641$$
 
+Ví dụ với $H_{\text{img}} = 480, N_{\text{cls}} = 80$:
+- P3 ($S=8 \implies \text{grid} = 60 \times 60 = 3600$):
+  $$b_{\text{cls}}(8) = \ln\left(\frac{5}{80 \times 3600}\right) = \ln\left(\frac{5}{288000}\right) \approx -10.9613$$
+- P5 ($S=32 \implies \text{grid} = 15 \times 15 = 225$):
+  $$b_{\text{cls}}(32) = \ln\left(\frac{5}{80 \times 225}\right) = \ln\left(\frac{5}{18000}\right) \approx -8.1887$$
+
 Tác dụng: Phản ánh chính xác mật độ đối tượng trên ô lưới (P3 chứa ít đối tượng trên mỗi cell hơn so với P5), triệt tiêu hoàn toàn hiện tượng bùng nổ Loss BCE ở vài iteration đầu tiên.

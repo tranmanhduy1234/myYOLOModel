@@ -1,59 +1,53 @@
 """
-face_landmark_dataset_v2.py
+face_landmark_dataset_v3.py
 =============================
-PyTorch Dataset / DataLoader cho annotations_all.jsonl (sinh boi
-process_dataset_parallel.py + merge_jsonl.py), CHINH SUA de KHOP TRUC
-TIEP voi dinh dang targets ma DetectHeadFaceLmk / FaceLandmarkDetectionLoss
-(head_face_landmark.py / loss_face_landmark.py) mong doi.
+PyTorch Dataset / DataLoader cho annotations_all.jsonl (sinh bởi
+process_dataset_parallel.py + merge_jsonl.py), khớp trực tiếp với định
+dạng targets mà DetectHeadFaceLmk / FaceLandmarkDetectionLoss (v3) mong
+đợi.
 
-THAY DOI SO VOI BAN GOC (face_landmark_dataset.py)
----------------------------------------------------------------------
-1. HO TRO NHIEU MAT / ANH (ban goc chi lay faces[0], gia dinh 1 mat/anh).
-   `record["faces"]` von di la MOT DANH SACH (extract_face_data() trong
-   process_dataset_parallel.py duyet toan bo result.face_landmarks), nen
-   du du lieu duoc trich xuat voi --num-faces 1 hay > 1, dataset nay deu
-   doc dung TOAN BO danh sach do, khong bi cat con 1 mat.
+THAY ĐỔI SO VỚI v2 (fix theo review):
+------------------------------------------------------------------------
+1. VALIDATE số landmark mỗi mặt so với `self.num_landmarks` (đã dò lúc
+   khởi tạo dataset). v2 giả định NGẦM rằng mọi record đều có cùng số
+   điểm landmark (chỉ dò từ 2000 dòng đầu) - nếu có vài record lệch (vd
+   chạy MediaPipe với cấu hình refine_landmarks khác nhau -> 468 vs 478
+   điểm), v2 sẽ crash muộn, khó hiểu, ngay tại torch.tensor(landmarks)
+   hoặc thậm chí muộn hơn ở phía loss. v3 kiểm tra NGAY trong
+   __getitem__, bỏ qua (skip) riêng mặt bị lệch và in CẢNH BÁO 1 LẦN duy
+   nhất (tránh spam log khi dataset lớn), thay vì để cả batch/cả lần
+   train crash.
+2. CLAMP box + landmark về trong biên ảnh [0, image_size] sau khi quy
+   đổi pixel. Dữ liệu normalized đôi khi hơi vượt [0,1] (nhiễu số hoặc
+   do model gốc sinh annotation không tuyệt đối chính xác) - clamp nhẹ
+   này chỉ để tránh toạ độ pixel âm/vượt biên ảnh, KHÔNG liên quan đến
+   margin của bbox->landmark (đó là việc của head/loss).
+3. Bổ sung `check_lmk_margin_coverage()` (import từ file riêng
+   check_lmk_margin_coverage.py) được nhắc trong docstring `main()` -
+   nên chạy 1 lần trên data thật trước khi train dài hạn, để chọn đúng
+   `lmk_margin` cho FaceLmkConfig (xem file đó để biết lý do).
+4. Demo ở `main()` cập nhật để minh hoạ đúng luồng đồng bộ:
+       cfg = FaceLmkConfig(...)
+       dataset = FaceLandmarkDataset(...)
+       cfg.sync_num_landmarks(dataset.num_landmarks)
 
-2. TRA VE PIXEL-SPACE, KHONG PHAI [0,1] NORMALIZED.
-   DetectHeadFaceLmk / FaceLandmarkDetectionLoss lam viec voi toa do
-   PIXEL cua anh dau vao mang. Vi transform resize ve dung
-   (image_size, image_size) (khong giu ti le, xem diem 5 trong docstring
-   ban goc: x chia rieng theo width, y chia rieng theo height nen KHONG
-   BI LECH khi nhan lai voi image_size), buoc quy doi rat don gian:
-       pixel = normalized * image_size     (ca x va y, vi anh vuong sau resize)
+CÁC ĐIỂM GIỮ NGUYÊN TỪ v2 (không đổi):
+------------------------------------------------------------------------
+- Hỗ trợ nhiều mặt / ảnh (record["faces"] là 1 danh sách).
+- Trả về PIXEL-SPACE, không phải [0,1] normalized.
+- Bỏ toạ độ z (depth).
+- `face_landmark_collate` gộp batch thành list[dict] khớp thẳng với
+  FaceLandmarkDetectionLoss.forward(preds, targets), không cần default_collate.
+- Bỏ qua (skip) các face có bbox suy biến (width/height <= min_box_size_px).
+- Toàn bộ kỹ thuật index byte-offset, lazy file handle theo worker, dò số
+  lượng landmark từ dữ liệu (không hard-code 478), DataLoader hiện đại
+  (pin_memory, persistent_workers, prefetch_factor).
 
-3. BO TOA DO Z (DEPTH). Head/loss hien tai chi xu ly landmark 2D (x, y).
-   z van con trong file JSONL goc (landmarks_normalized co z) neu sau
-   nay can dung (vd uoc luong pose 3D), nhung o day khong dua vao tensor
-   landmarks tra ve.
-
-4. __getitem__ tra ve SO LUONG MAT KHAC NHAU MOI ANH (N co the = 0, 1, 2...)
-   -> KHONG THE dung default_collate (no doi moi sample cung shape). Vi
-   vay file nay dinh nghia `face_landmark_collate` rieng, gop batch thanh:
-       images : (B, 3, H, W)  - stack binh thuong (cung kich thuoc sau resize)
-       targets: list[dict] do dai B, MOI PHAN TU dung dinh dang ma
-                FaceLandmarkDetectionLoss.forward(preds, targets) can:
-                    {"boxes": (N,4) xyxy pixel,
-                     "labels": (N,) long,
-                     "landmarks": (N, K, 2) xyxy pixel,
-                     "landmarks_valid": (N,) bool}
-   -> Dua thang batch["targets"] vao loss_fn(preds, batch["targets"]),
-      KHONG can xu ly gi them.
-
-5. Bo qua (skip, khong dua vao targets) cac face co bbox suy bien
-   (width hoac height <= 0 sau khi tinh tu min/max landmark) de tranh
-   NaN/Inf khi tinh CIoU hoac khi chuan hoa landmark theo box trong loss.
-
-6. Giu nguyen toan bo ky thuat cua ban goc: byte-offset index cho JSONL
-   lon, lazy file handle theo worker, dò so luong landmark tu du lieu
-   (khong hard-code 478), DataLoader hien dai (pin_memory, persistent_workers,
-   prefetch_factor).
-
-CAI DAT:
+CÀI ĐẶT:
     pip install torch torchvision matplotlib numpy pillow
 
-CHAY DEMO:
-    python3 face_landmark_dataset_v2.py --root-dir /duong/dan/DataPretrain
+CHẠY DEMO:
+    python3 face_landmark_dataset_v3.py --root-dir /duong/dan/DataPretrain
 """
 
 import argparse
@@ -127,15 +121,15 @@ def _detect_num_landmarks(jsonl_path: str, offsets: np.ndarray, scan_limit: int 
 
 class FaceLandmarkDataset(Dataset):
     """
-    Mỗi sample trả về (LƯU Ý: khác bản gốc, N mặt thay vì 1 mặt cố định):
+    Mỗi sample trả về:
         image            : FloatTensor (3, H, W), giá trị [0, 1]
-        boxes            : FloatTensor (N, 4)      -- xyxy, PIXEL trong khong gian (H, W)
-        labels           : LongTensor  (N,)        -- toan 0 ("face"), du sau nay them class
-        landmarks        : FloatTensor (N, K, 2)   -- (x, y) PIXEL, K = so landmark/mat
-        landmarks_valid  : BoolTensor  (N,)         -- True = mat nay co nhan landmark day du
+        boxes            : FloatTensor (N, 4)      -- xyxy, PIXEL trong không gian (H, W)
+        labels           : LongTensor  (N,)        -- toàn 0 ("face"), dự sau này thêm class
+        landmarks        : FloatTensor (N, K, 2)   -- (x, y) PIXEL, K = số landmark/mặt
+        landmarks_valid  : BoolTensor  (N,)         -- True = mặt này có nhãn landmark đầy đủ
         file_name        : str
         orig_size        : LongTensor (2,)         -- (width, height) ảnh gốc
-        (N co the = 0 neu anh khong co mat nao)
+        (N có thể = 0 nếu ảnh không có mặt nào)
     """
 
     def __init__(
@@ -149,7 +143,7 @@ class FaceLandmarkDataset(Dataset):
         self.root_dir = root_dir
         self.images_dir = os.path.join(root_dir, "Images")
         self.jsonl_path = os.path.join(root_dir, jsonl_name)
-        self.min_box_size_px = min_box_size_px  # bo qua bbox qua nho/suy bien sau khi quy pixel
+        self.min_box_size_px = min_box_size_px  # bỏ qua bbox quá nhỏ/suy biến sau khi quy pixel
 
         if not os.path.exists(self.jsonl_path):
             raise FileNotFoundError(
@@ -160,6 +154,10 @@ class FaceLandmarkDataset(Dataset):
         self.offsets = _build_or_load_offsets(self.jsonl_path)
         self.num_landmarks = _detect_num_landmarks(self.jsonl_path, self.offsets)
         self.image_size = image_size
+
+        # cờ chỉ để in cảnh báo "số landmark lệch" đúng 1 lần (fix #1),
+        # tránh spam hàng nghìn dòng log nếu dataset lớn có nhiều record lệch.
+        self._warned_lmk_mismatch = False
 
         # ---- Transform mặc định: KHÔNG augmentation, chỉ decode + resize + chuẩn hoá ----
         # Muốn thêm augmentation (vd RandomHorizontalFlip), xem ghi chú
@@ -191,24 +189,45 @@ class FaceLandmarkDataset(Dataset):
         image = Image.open(img_path).convert("RGB")
         orig_w, orig_h = image.size
 
-        S = self.image_size
+        S = float(self.image_size)
         faces = record.get("faces", [])
 
         boxes, labels, landmarks, landmarks_valid = [], [], [], []
         for face in faces:
             bb = face["bounding_box_normalized"]
-            x1, y1 = bb["xmin"] * S, bb["ymin"] * S
-            x2, y2 = bb["xmax"] * S, bb["ymax"] * S
+            # (fix #2) clamp nhẹ về biên ảnh [0, S] - chỉ để chặn nhiễu số
+            # (normalized hơi ngoài [0,1]), KHÔNG liên quan tới lmk_margin.
+            x1 = min(max(bb["xmin"] * S, 0.0), S)
+            y1 = min(max(bb["ymin"] * S, 0.0), S)
+            x2 = min(max(bb["xmax"] * S, 0.0), S)
+            y2 = min(max(bb["ymax"] * S, 0.0), S)
             if (x2 - x1) < self.min_box_size_px or (y2 - y1) < self.min_box_size_px:
-                continue  # bbox suy bien (vd tat ca landmark trung 1 diem) -> bo qua
+                continue  # bbox suy biến -> bỏ qua
 
             pts = face["landmarks_normalized"]
-            lm = [[p["x"] * S, p["y"] * S] for p in pts]
+            if len(pts) != self.num_landmarks:
+                # (fix #1) record lệch số landmark so với phần còn lại của
+                # dataset -> bỏ QUA RIÊNG mặt này (không làm crash cả
+                # batch/cả lần train), chỉ cảnh báo 1 lần duy nhất.
+                if not self._warned_lmk_mismatch:
+                    print(
+                        f"[Dataset] CẢNH BÁO: {record['file_name']} có "
+                        f"{len(pts)} điểm landmark, khác với {self.num_landmarks} "
+                        "đã dò lúc khởi tạo dataset - bỏ qua mặt này. "
+                        "(cảnh báo này chỉ in 1 lần, có thể còn record khác bị lệch)"
+                    )
+                    self._warned_lmk_mismatch = True
+                continue
+
+            lm = [
+                [min(max(p["x"] * S, 0.0), S), min(max(p["y"] * S, 0.0), S)]
+                for p in pts
+            ]
 
             boxes.append([x1, y1, x2, y2])
-            labels.append(0)  # 1 class duy nhat: "face"
+            labels.append(0)  # 1 class duy nhất: "face"
             landmarks.append(lm)
-            landmarks_valid.append(True)  # MediaPipe luon xuat du landmark khi phat hien mat
+            landmarks_valid.append(True)  # MediaPipe luôn xuất đủ landmark khi phát hiện mặt
 
         if boxes:
             boxes_t = torch.tensor(boxes, dtype=torch.float32)
@@ -235,7 +254,7 @@ class FaceLandmarkDataset(Dataset):
 
 
 # ---------------------------------------------------------------------------
-# Collate: gop N mat khac nhau moi anh thanh dung dinh dang FaceLandmarkDetectionLoss can
+# Collate: gộp N mặt khác nhau mỗi ảnh thành đúng định dạng FaceLandmarkDetectionLoss cần
 # ---------------------------------------------------------------------------
 
 def face_landmark_collate(batch):
@@ -256,7 +275,7 @@ def face_landmark_collate(batch):
 
     return {
         "image": images,
-        "targets": targets,     # <-- dua thang vao loss_fn(preds, batch["targets"])
+        "targets": targets,     # <-- đưa thẳng vào loss_fn(preds, batch["targets"])
         "file_name": file_names,
         "orig_size": orig_sizes,
     }
@@ -284,39 +303,39 @@ def make_dataloader(
 
 
 # ---------------------------------------------------------------------------
-# (Tuy chon, MAC DINH KHONG bat) Random horizontal flip
+# (Tuỳ chọn, MẶC ĐỊNH KHÔNG bật) Random horizontal flip
 # ---------------------------------------------------------------------------
 """
-CANH BAO QUAN TRONG khi tu them RandomHorizontalFlip cho landmark dang
-MESH (478 diem MediaPipe FaceMesh, khac voi 5/68-diem thuong gap):
+CẢNH BÁO QUAN TRỌNG khi tự thêm RandomHorizontalFlip cho landmark dạng
+MESH (478 điểm MediaPipe FaceMesh, khác với 5/68-điểm thường gặp):
 
-Lat ngang anh KHONG CHI can doi x -> (image_size - x). Voi mesh dense,
-MOI INDEX co Y NGHIA CO DINH (vd index 33 luon la "khoe mat trai" trong
-he toa do CHUAN cua MediaPipe). Sau khi lat anh, diem tung la "mat trai"
-gio nam o VI TRI cua "mat phai" -> can HOAN VI ca CHI SO, khong chi doi
-dau toa do, neu khong model se hoc nhan tuong tu voi 2 phan buc mat.
+Lật ngang ảnh KHÔNG CHỈ cần đổi x -> (image_size - x). Với mesh dense,
+MỖI INDEX có Ý NGHĨA CỐ ĐỊNH (vd index 33 luôn là "khoé mắt trái" trong
+hệ toạ độ CHUẨN của MediaPipe). Sau khi lật ảnh, điểm từng là "mắt trái"
+giờ nằm ở VỊ TRÍ của "mắt phải" -> cần HOÁN VỊ cả CHỈ SỐ, không chỉ đổi
+dấu toạ độ, nếu không model sẽ học nhầm tưởng với 2 phần bức mặt.
 
-MediaPipe co cong bo bang tuong ung trai-phai chinh thuc (canonical face
-mesh symmetry) nhung file nay KHONG hard-code lai bang do (co the sai
-lech version, rui ro cao neu sai). Neu ban co bang flip_index_map dung
-(list do dai K, flip_index_map[i] = index diem doi xung cua diem i),
-dung ham duoi day; neu KHONG co, DUNG bat flip cho du lieu mesh nay -
-tot hon la thieu augmentation con hon la augmentation sai lam mo hinh
-hoc sai cau truc khuon mat.
+MediaPipe có công bố bảng tương ứng trái-phải chính thức (canonical face
+mesh symmetry) nhưng file này KHÔNG hard-code lại bảng đó (có thể sai
+lệch version, rủi ro cao nếu sai). Nếu bạn có bảng flip_index_map đúng
+(list độ dài K, flip_index_map[i] = index điểm đối xứng của điểm i),
+dùng hàm dưới đây; nếu KHÔNG có, ĐỪNG bật flip cho dữ liệu mesh này -
+tốt hơn là thiếu augmentation còn hơn là augmentation sai làm mô hình
+học sai cấu trúc khuôn mặt.
 """
 
 def hflip_sample(sample: dict, image_size: int, flip_index_map: Optional[List[int]] = None) -> dict:
     """
-    sample: 1 phan tu tra ve boi FaceLandmarkDataset.__getitem__ (TRUOC
-            khi collate). Lat ngang image + box + landmark.
-    flip_index_map: BAT BUOC neu landmarks la mesh dense (xem canh bao
-                     tren). Voi so do landmark DOI XUNG TU NHIEN qua chi
-                     so (vd 5-diem RetinaFace neu ban tu quy uoc
-                     [0,1,2,3,4] = [mat_trai,mat_phai,mui,mieng_trai,
-                     mieng_phai]) thi map = [1,0,2,4,3].
+    sample: 1 phần tử trả về bởi FaceLandmarkDataset.__getitem__ (TRƯỚC
+            khi collate). Lật ngang image + box + landmark.
+    flip_index_map: BẮT BUỘC nếu landmarks là mesh dense (xem cảnh báo
+                     trên). Với sơ đồ landmark ĐỐI XỨNG TỰ NHIÊN qua chỉ
+                     số (vd 5-điểm RetinaFace nếu bạn tự quy ước
+                     [0,1,2,3,4] = [mắt_trái,mắt_phải,mũi,miệng_trái,
+                     miệng_phải]) thì map = [1,0,2,4,3].
     """
     img = sample["image"]
-    flipped_img = torch.flip(img, dims=[-1])  # lat truc W
+    flipped_img = torch.flip(img, dims=[-1])  # lật trục W
 
     boxes = sample["boxes"].clone()
     if boxes.numel():
@@ -329,9 +348,9 @@ def hflip_sample(sample: dict, image_size: int, flip_index_map: Optional[List[in
         landmarks[..., 0] = image_size - landmarks[..., 0]
         if flip_index_map is not None:
             landmarks = landmarks[:, flip_index_map, :]
-        # else: CHI doi truc x, KHONG hoan vi chi so - dung duoc cho cac
-        # diem doi xung qua duong giua mat (vd chop mui, canh moi giua)
-        # nhung SAI cho cac diem co index gan voi "trai/phai" co dinh.
+        # else: CHỈ đổi trục x, KHÔNG hoán vị chỉ số - dùng được cho các
+        # điểm đối xứng qua đường giữa mặt (vd chóp mũi, cạnh môi giữa)
+        # nhưng SAI cho các điểm có index gắn với "trái/phải" cố định.
 
     out = dict(sample)
     out["image"] = flipped_img
@@ -353,7 +372,7 @@ def visualize_batch(loader: DataLoader, save_path: str = "dataloader_demo.png", 
 
     batch = next(iter(loader))
     images = batch["image"]        # (B,3,H,W)
-    targets = batch["targets"]     # list[dict], do dai B
+    targets = batch["targets"]     # list[dict], độ dài B
     file_names = batch["file_name"]
 
     n = min(max_images, images.shape[0])
@@ -396,7 +415,7 @@ def visualize_batch(loader: DataLoader, save_path: str = "dataloader_demo.png", 
 
 
 # ---------------------------------------------------------------------------
-# Demo chạy trực tiếp
+# Demo chạy trực tiếp (fix #4: minh hoạ luồng đồng bộ cfg <-> dataset)
 # ---------------------------------------------------------------------------
 
 def main():
@@ -412,6 +431,15 @@ def main():
     dataset = FaceLandmarkDataset(args.root_dir, image_size=args.image_size)
     print(f"Tổng số ảnh trong dataset : {len(dataset)}")
     print(f"Số landmark / mặt         : {dataset.num_landmarks}")
+
+    # ---- Đồng bộ config dùng chung cho head/loss (xem face_lmk_config.py) ----
+    from face_lmk_config import FaceLmkConfig
+    cfg = FaceLmkConfig(nc=1, reg_max=16)
+    cfg.sync_num_landmarks(dataset.num_landmarks)
+    print(f"FaceLmkConfig đã đồng bộ  : num_landmarks={cfg.num_landmarks}, "
+          f"lmk_margin={cfg.lmk_margin}")
+    print("-> dùng CHÍNH cfg này để tạo DetectHeadFaceLmk(chs=..., cfg=cfg) "
+          "và FaceLandmarkDetectionLoss(cfg=cfg).")
 
     sample = dataset[0]
     print("Shape 1 sample:")

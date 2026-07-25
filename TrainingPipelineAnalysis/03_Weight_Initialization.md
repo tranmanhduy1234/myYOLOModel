@@ -148,7 +148,7 @@ prior = -math.log((1 - 0.01) / 0.01)  # -ln(99) = -4.59512
 for m in (self.cls_o2m, self.cls_o2o):
     nn.init.constant_(m.bias, prior)
 ```
-- **Bản chất toán học**: Ở đầu quá trình huấn luyện, trên tổng số $A = 8400$ anchor, chỉ có khoảng 10-20 anchor chứa vật thể (Foreground), còn lại 99%+ là nền (Background).
+- **Bản chất toán học**: Ở đầu quá trình huấn luyện, trên tổng số $A = 4725$ anchor (với $img\_size = 480$) hoặc $A = 8400$ anchor (với $img\_size = 640$), chỉ có khoảng 10-20 anchor chứa vật thể (Foreground), còn lại 99%+ là nền (Background).
 - Nếu khởi tạo $bias = 0 \implies \text{Sigmoid}(0) = 0.5$. Mô hình sẽ dự đoán xác suất 50% cho tất cả 80 lớp đối tượng ở mọi anchor. Khi tính loss Binary Cross-Entropy (BCE), giá trị loss sẽ bùng nổ lên cực lớn:
   $$\mathcal{L}_{\text{BCE}} = -\log(0.5) \approx 0.693 \quad \text{cho mỗi class} \implies \text{Total Loss} \approx 80 \times 0.693 \approx 55.4$$
 - Bằng cách gán bias bằng $-\ln(99) \approx -4.5951 \implies \text{Sigmoid}(-4.5951) = 0.01$. Xác suất dự đoán ban đầu cho mọi class được hạ xuống 1%. Loss BCE ban đầu cho background (chiếm 99% data) giảm xuống gần bằng 0:

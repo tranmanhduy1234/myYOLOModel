@@ -200,7 +200,7 @@ $$\mathcal{L}_{\text{cls}}^{\text{branch}} = \frac{1}{\sum_{a \in \text{Pos}} w_
 
 với $\text{BCE}(\hat{z}, t) = -t \cdot \log(\sigma(\hat{z})) - (1 - t) \cdot \log(1 - \sigma(\hat{z}))$.
 
-- Loss phân loại được tính trên **toàn bộ $A = 8400$ anchor (cả Foreground lẫn Background)**.
+- Loss phân loại được tính trên **toàn bộ $A = 4725$ anchor với $img\_size = 480$ (hoặc $A = 8400$ với $img\_size = 640$) (cả Foreground lẫn Background)**.
 - Với Foreground Anchor: $t = T_{\text{cls}, a, c} \in (0, 1]$ (Soft target).
 - Với Background Anchor: $t = 0$.
 

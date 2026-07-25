@@ -91,7 +91,7 @@ Sơ đồ tổng quan toàn bộ vòng đời huấn luyện 15 bước được
 - **Output**: Dictionary chứa dự đoán của hai nhánh:
   - `o2m`: Nhánh One-to-Many cho huấn luyện hội tụ nhanh (`cls`: $(B, A, N_{cls})$, `box`: $(B, A, 4)$ `[PIXEL]`, `reg_raw`: $(B, 4 \cdot \text{reg\_max}, A)$ `[GRID]`).
   - `o2o`: Nhánh One-to-One cho suy luận NMS-Free (`cls`, `box`, `reg_raw` tương tự).
-  - `anchors`: Tọa độ tâm anchor $(A, 2)$ `[GRID]`.
+  - `anchors`: Tọa độ tâm anchor $(A, 2)$ `[GRID]` với $A = 4725$ ở kích thước $480 \times 480$ (hoặc $A = 8400$ ở kích thước $640 \times 640$).
   - `strides`: Hệ số stride $(A, 1)$ tương ứng (8, 16, 32).
 
 #### Bước 7: Tính toán Mất mát Kép (Dual-Head Loss Computation)
@@ -159,15 +159,15 @@ Pipeline huấn luyện được tối ưu hóa tốc độ nhờ các kỹ thu�
 +-------------------------------------------------------------------+
 | VRAM Memory Footprint Breakdown                                   |
 +-------------------------------------------------------------------+
-| 1. Model Parameters (FP32/FP16)     : ~45 - 90 MB                 |
-| 2. Optimizer States (AdamW 2x FP32) : ~180 - 360 MB               |
-| 3. ModelEMA Shadow Weights (FP32)   : ~45 - 90 MB                 |
+| 1. Model Parameters (FP32 23.63M)   : ~94.5 MB                    |
+| 2. Optimizer States (AdamW 2x FP32) : ~189.1 MB                   |
+| 3. ModelEMA Shadow Weights (FP32)   : ~94.5 MB                    |
 | 4. Forward Activations (AMP FP16)   : ~1.2 - 2.8 GB (Batch Size 4) |
 | 5. Autograd Computational Graph     : ~800 MB - 1.5 GB            |
 | 6. TAL Assigner Tensors [PIXEL]     : ~200 - 500 MB               |
 | 7. PyTorch Workspace & CUDA Context : ~600 MB                     |
 +-------------------------------------------------------------------+
-| Total Peak Memory Usage             : ~3.0 - 5.5 GB               |
+| Total Peak Memory Usage             : ~3.2 - 5.8 GB               |
 +-------------------------------------------------------------------+
 ```
 

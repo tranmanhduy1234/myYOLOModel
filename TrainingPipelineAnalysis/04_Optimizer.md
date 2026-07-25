@@ -148,12 +148,12 @@ nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip_norm)  # max_norm = 1
 
 ### 3.2. Ảnh Hưởng Tới Bộ Nhớ VRAM và Tốc Độ Tính Toán
 
-Với mô hình NMSFreeDetector có khoảng $N = 11.8 \times 10^6$ tham số:
-- **Bộ nhớ lưu trọng số FP32**: $11.8 \times 4 \approx 47.2$ MB.
-- **Bộ nhớ lưu State Optimizer AdamW (FP32)**:
-  - Vector $m_t$: $47.2$ MB.
-  - Vector $v_t$: $47.2$ MB.
-  - Tổng bộ nhớ cho Optimizer State = $94.4$ MB.
+Với mô hình `NMSFreeDetector` cấu hình chuẩn (`TrainConfig`: `nc=80`, `reg_max=16`, `backbone_w=(56, 112, 224, 448, 640)`, `backbone_n=(3, 6, 6, 3)`), tổng số lượng tham số học được là $N = 23,634,920$ ($\approx 23.63 \times 10^6$ tham số):
+- **Bộ nhớ lưu trọng số FP32**: $23.635 \times 4 \approx 94.54$ MB.
+- **Bộ nhớ lưu State Optimizer AdamW (2x FP32)**:
+  - Vector $m_t$: $94.54$ MB.
+  - Vector $v_t$: $94.54$ MB.
+  - Tổng bộ nhớ cho Optimizer State = $189.08$ MB.
 Mức tiêu tốn này là hoàn toàn tối ưu và phù hợp cho các GPU thương mại phổ thông (từ 8GB VRAM trở lên).
 
 ---

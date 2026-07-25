@@ -85,9 +85,9 @@ Cấu hình mặc định trong `TrainConfig`: `batch_size = 4`, `img_size = 480
 - **Khắc phục cài sẵn**: Việc đặt `momentum = 0.03` nhỏ cho BatchNorm2d và sử dụng `ModelEMA` đã làm mịn và triệt tiêu hoàn toàn sự biến động này.
 
 #### 2. Ảnh hưởng của Hệ số Strides $(8, 16, 32)$:
-- Stride 8 (P3): Độ phân giải $60 \times 60$, chịu trách nhiệm phát hiện các vật thể nhỏ ($< 32 \times 32$ pixels).
-- Stride 16 (P4): Độ phân giải $30 \times 30$, phát hiện vật thể trung bình.
-- Stride 32 (P5): Độ phân giải $15 \times 15$, phát hiện vật thể kích thước lớn.
+- Stride 8 (P3): Độ phân giải $60 \times 60 = 3600$ ô lưới ở kích thước $480 \times 480$ ($80 \times 80 = 6400$ ở kích thước $640 \times 640$), chịu trách nhiệm phát hiện các vật thể nhỏ ($< 32 \times 32$ pixels).
+- Stride 16 (P4): Độ phân giải $30 \times 30 = 900$ ô lưới ở kích thước $480 \times 480$ ($40 \times 40 = 1600$ ở kích thước $640 \times 640$), phát hiện vật thể trung bình.
+- Stride 32 (P5): Độ phân giải $15 \times 15 = 225$ ô lưới ở kích thước $480 \times 480$ ($20 \times 20 = 400$ ở kích thước $640 \times 640$), phát hiện vật thể kích thước lớn.
 - Việc tính toán `init_stride_bias` chuẩn xác cho từng stride giúp cân bằng mật độ anchor và ổn định loss trên cả 3 quy mô này.
 
 ---

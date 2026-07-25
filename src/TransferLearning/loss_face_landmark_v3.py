@@ -1,57 +1,27 @@
 """
-loss_face_landmark.py  (v2)
+loss_face_landmark.py  (v3)
 =============================
-Loss cho bai toan "Face Detection + Facial Landmarks", transfer tu
-DetectionLoss goc (TAL + CIoU + DFL + BCE, 2 nhanh o2m/o2o).
+Loss cho bài toán "Face Detection + Facial Landmarks", transfer từ
+DetectionLoss gốc (TAL + CIoU + DFL + BCE, 2 nhánh o2m/o2o).
 
-THAY DOI SO VOI v1:
+THAY ĐỔI SO VỚI v2 (fix theo review):
 ------------------------------------------------------------------------
-1. Landmark loss chuyen sang KHONG GIAN CHUAN HOA THEO BBOX (khop voi
-   head v2 - xem head_face_landmark.py):
+1. Nhận `cfg: FaceLmkConfig` thay vì các tham số num_landmarks/lmk_margin
+   rời rạc. Đây là NGUỒN DUY NHẤT cho num_landmarks/lmk_margin, dùng
+   CHUNG với head_face_landmark_v3.py -> không còn khả năng 2 bên lệch
+   nhau âm thầm (xem face_lmk_config.py để biết lý do).
+2. preds["o2m"]/["o2o"] từ head v3 lúc training KHÔNG còn field "lmk"
+   (pixel đã decode) nữa, chỉ còn "cls"/"box"/"reg_raw"/"lmk_raw" - loss
+   vốn dĩ CHƯA BAO GIỜ đọc field "lmk" lúc train (chỉ đọc lmk_raw), nên
+   phần này không cần sửa logic, chỉ cần xác nhận lại (xem _branch_loss).
 
-       pred_norm  = sigmoid(lmk_raw)                       in (0,1)
-       target_norm = (target_landmark_pixel - box1e) / boxwe   [box la
-                     GT box DA MATCH boi assigner, mo rong margin]
-
-   Diem quan trong: target_norm duoc tinh tu GT BOX (bien tu du lieu
-   that, luon dung va on dinh ngay tu buoc dau training) - KHONG dung
-   box du doan cua model. Nho vay loss landmark:
-     - Khong phu thuoc/khong lam nhieu gradient cua box regression (2
-       nhanh hoc doc lap, tranh vong lap bat on dinh "box sai -> target
-       landmark sai -> landmark sai -> box sai hon").
-     - On dinh tu epoch dau tien, khac voi phuong an "chuan hoa theo box
-       du doan" se rat nhieu luc box con te.
-   Luc INFERENCE (khong co GT), head moi dung box DU DOAN de decode
-   landmark ra pixel - luc do khong con van de gradient (forward-only).
-
-   Loss dung tren khong gian [0,1] bi chan nen chuyen tu Wing-loss-tren-
-   pixel (v1) sang Smooth L1 (Huber) tren khong gian chuan hoa - phu hop
-   hon voi mien gia tri nho, bi chan. Wing loss van duoc giu lam option
-   (voi w/epsilon da chinh lai cho thang do [0,1]).
-
-2. THEM Geometric Consistency Loss (tuy chon, mac dinh TAT - can khai
-   bao constraints vi index diem landmark phu thuoc dataset/annotation
-   scheme cua ban, vd 5-point RetinaFace, 68-point iBUG, 98-point WFLW
-   deu khac thu tu). Loss nay ap dang hinge len CHINH pred_norm (khong
-   can GT) nen ap dung duoc tren MOI anchor duong, ke ca anh khong co
-   nhan landmark day du - vai tro nhu 1 regularizer "biet truoc cau truc
-   khuon mat" (mat luon o tren mui, mui luon o tren mieng, mat trai luon
-   ben trai mat phai...).
-
-CO CHE DAM BAO LANDMARK/BOX DUNG NGUOI (khong doi so voi v1):
-------------------------------------------------------------------------
-TaskAlignedAssigner tra ve `target_gt_idx` (bs, A) - id GT ma tung anchor
-duoc gan. Ca box lan landmark cua 1 anchor deu duoc lay tu CUNG 1 GT qua
-CUNG 1 index nay => khong the "le" landmark cua mat nay sang mat khac
-khi anh co nhieu mat.
-
-Dinh dang targets (giong v1):
+Định dạng targets (không đổi so với v1/v2):
   targets = [
       {
         "boxes":  (N,4) xyxy pixel,
         "labels": (N,)  long,
-        "landmarks":       (N, K, 2) xyxy pixel toa do tung diem landmark,
-        "landmarks_valid": (N,)  bool,  # True = GT nay co nhan landmark
+        "landmarks":       (N, K, 2) xyxy pixel toạ độ từng điểm landmark,
+        "landmarks_valid": (N,)  bool,  # True = GT này có nhãn landmark
       },
       ...
   ]
@@ -61,19 +31,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Tai su dung ham hinh hoc + TAL assigner + BboxLoss tu ban goc, khong
-# viet lai. Sua duong dan import cho khop cau truc project thuc te.
-from  src.train.loss import bbox_iou, dist2bbox, bbox2dist, TaskAlignedAssigner, BboxLoss  # noqa: F401
+# Tái sử dụng hàm hình học + TAL assigner + BboxLoss từ bản gốc, không
+# viết lại. Sửa đường dẫn import cho khớp cấu trúc project thực tế.
+from src.train.loss import bbox_iou, dist2bbox, bbox2dist, TaskAlignedAssigner, BboxLoss  # noqa: F401
+from face_lmk_config import FaceLmkConfig
 
 # ------------------------------------------------------------------------------
-# 1. Landmark loss tren khong gian CHUAN HOA THEO BBOX (bi chan trong [0,1])
+# 1. Landmark loss trên không gian CHUẨN HOÁ THEO BBOX (bị chặn trong [0,1])
 # ------------------------------------------------------------------------------
 def normalized_wing_loss(pred, target, w=0.10, epsilon=0.02):
     """
-    Bien the Wing Loss (Feng et al., 2018) cho khong gian CHUAN HOA
-    [0,1] (khac ban pixel o v1): w/epsilon nho hon nhieu vi bien do sai
-    so toi da chi la 1.0 (thay vi hang chuc/tram pixel). Nhay hon voi sai
-    so nho (do chinh xac sub-pixel-ratio) nhung van tuyen tinh voi outlier.
+    Biến thể Wing Loss (Feng et al., 2018) cho không gian CHUẨN HOÁ
+    [0,1] (khác bản pixel ở v1): w/epsilon nhỏ hơn nhiều vì biên độ sai
+    số tối đa chỉ là 1.0 (thay vì hàng chục/trăm pixel). Nhạy hơn với sai
+    số nhỏ (độ chính xác sub-pixel-ratio) nhưng vẫn tuyến tính với outlier.
     """
     diff = (pred - target).abs()
     import math
@@ -82,9 +53,9 @@ def normalized_wing_loss(pred, target, w=0.10, epsilon=0.02):
 
 def landmark_regression_loss(pred_norm, target_norm, loss_type="smooth_l1", beta=0.05):
     """
-    pred_norm, target_norm: cung shape (..., ) trong [0,1] (xap xi).
-    loss_type: "smooth_l1" (mac dinh, on dinh, phu hop mien gia tri bi
-               chan) hoac "wing" (nhay hon voi sai so nho).
+    pred_norm, target_norm: cùng shape (..., ) trong [0,1] (xấp xỉ).
+    loss_type: "smooth_l1" (mặc định, ổn định, phù hợp miền giá trị bị
+               chặn) hoặc "wing" (nhạy hơn với sai số nhỏ).
     """
     if loss_type == "wing":
         return normalized_wing_loss(pred_norm, target_norm)
@@ -92,31 +63,31 @@ def landmark_regression_loss(pred_norm, target_norm, loss_type="smooth_l1", beta
 
 
 # ------------------------------------------------------------------------------
-# 2. Geometric Consistency Loss (TUY CHON) - rang buoc thu tu hinh hoc
+# 2. Geometric Consistency Loss (TUỲ CHỌN) - ràng buộc thứ tự hình học
 # ------------------------------------------------------------------------------
 def geometric_consistency_loss(pred_norm, constraints, margin=0.02):
     """
-    pred_norm: (N, K, 2) toa do landmark DA sigmoid (chuan hoa theo bbox),
-               N = so anchor duong dang xet (KHONG can landmark GT, day
-               la regularizer thuan tuy tren du doan).
+    pred_norm: (N, K, 2) toạ độ landmark ĐÃ sigmoid (chuẩn hoá theo bbox),
+               N = số anchor dương đang xét (KHÔNG cần landmark GT, đây
+               là regularizer thuần tuý trên dự đoán).
     constraints: list[(idx_a, idx_b, axis, sign)]
-        axis: 0 = truc x, 1 = truc y
-        sign = +1  => yeu cau pred[idx_a, axis] + margin <= pred[idx_b, axis]
-                      (vd rang buoc "mat trai (idx_a) nam TREN mui (idx_b)"
-                      neu idx_a, idx_b la index diem mat trai/mui va axis=1)
-        sign = -1  => chieu nguoc lai
-        Vi phaply thi phat hinge loss = relu(vi_pham).
+        axis: 0 = trục x, 1 = trục y
+        sign = +1  => yêu cầu pred[idx_a, axis] + margin <= pred[idx_b, axis]
+                      (vd ràng buộc "mắt trái (idx_a) nằm TRÊN mũi (idx_b)"
+                      nếu idx_a, idx_b là index điểm mắt trái/mũi và axis=1)
+        sign = -1  => chiều ngược lại
+        Vi phạm thì phạt hinge loss = relu(vi_pham).
 
-    Vi du constraints cho so do 5-diem RetinaFace-style
+    Ví dụ constraints cho sơ đồ 5-điểm RetinaFace-style
     [left_eye=0, right_eye=1, nose=2, left_mouth=3, right_mouth=4]
-    (trai/phai o day la trai/phai TREN ANH, khong phai trai/phai cua
-    NGUOI trong anh - can doi chieu dung voi annotation scheme cua ban):
+    (trái/phải ở đây là trái/phải TRÊN ẢNH, không phải trái/phải của
+    NGƯỜI trong ảnh - cần đối chiếu đúng với annotation scheme của bạn):
         constraints = [
             (0, 1, 0, +1),   # left_eye.x + margin <= right_eye.x
             (3, 4, 0, +1),   # left_mouth.x + margin <= right_mouth.x
-            (0, 2, 1, +1),   # left_eye.y + margin <= nose.y  (mat tren mui)
+            (0, 2, 1, +1),   # left_eye.y + margin <= nose.y  (mắt trên mũi)
             (1, 2, 1, +1),   # right_eye.y + margin <= nose.y
-            (2, 3, 1, +1),   # nose.y + margin <= left_mouth.y (mui tren mieng)
+            (2, 3, 1, +1),   # nose.y + margin <= left_mouth.y (mũi trên miệng)
             (2, 4, 1, +1),
         ]
     """
@@ -132,41 +103,31 @@ def geometric_consistency_loss(pred_norm, constraints, margin=0.02):
 
 
 # ------------------------------------------------------------------------------
-# 3. FaceLandmarkDetectionLoss: DetectionLoss goc + landmark + geo (tuy chon)
+# 3. FaceLandmarkDetectionLoss: DetectionLoss gốc + landmark + geo (tuỳ chọn)
 # ------------------------------------------------------------------------------
 class FaceLandmarkDetectionLoss(nn.Module):
-    def __init__(
-        self, nc=1, reg_max=16, num_landmarks=5,
-        topk_o2m=10, topk_o2o=1,
-        alpha=0.5, beta=6.0,
-        box_gain=7.5, cls_gain=0.5, dfl_gain=1.5, lmk_gain=1.0,
-        o2m_weight=1.0, o2o_weight=1.0,
-        lmk_margin=0.15,                # phai KHOP voi lmk_margin cua head khi inference
-        lmk_loss_type="smooth_l1",      # "smooth_l1" hoac "wing"
-        geo_constraints=None,           # list[(idx_a, idx_b, axis, sign)], None/[] = tat
-        geo_gain=0.0,                   # >0 de bat geometric consistency loss
-        geo_margin=0.02,
-    ):
+    def __init__(self, cfg: FaceLmkConfig):
         super().__init__()
-        self.nc = nc
-        self.reg_max = reg_max
-        self.num_landmarks = num_landmarks
+        self.cfg = cfg
+        self.nc = cfg.nc
+        self.reg_max = cfg.reg_max
+        self.num_landmarks = cfg.require_num_landmarks()
         self.box_gain, self.cls_gain, self.dfl_gain, self.lmk_gain = (
-            box_gain, cls_gain, dfl_gain, lmk_gain
+            cfg.box_gain, cfg.cls_gain, cfg.dfl_gain, cfg.lmk_gain
         )
-        self.o2m_weight, self.o2o_weight = o2m_weight, o2o_weight
-        self.lmk_margin = lmk_margin
-        self.lmk_loss_type = lmk_loss_type
-        self.geo_constraints = geo_constraints or []
-        self.geo_gain = geo_gain
-        self.geo_margin = geo_margin
+        self.o2m_weight, self.o2o_weight = cfg.o2m_weight, cfg.o2o_weight
+        self.lmk_margin = cfg.lmk_margin
+        self.lmk_loss_type = cfg.lmk_loss_type
+        self.geo_constraints = cfg.geo_constraints or []
+        self.geo_gain = cfg.geo_gain
+        self.geo_margin = cfg.geo_margin
 
-        self.assigner_o2m = TaskAlignedAssigner(topk=topk_o2m, num_classes=nc, alpha=alpha, beta=beta)
-        self.assigner_o2o = TaskAlignedAssigner(topk=topk_o2o, num_classes=nc, alpha=alpha, beta=beta)
-        self.bbox_loss = BboxLoss(reg_max)
+        self.assigner_o2m = TaskAlignedAssigner(topk=cfg.topk_o2m, num_classes=cfg.nc, alpha=cfg.alpha, beta=cfg.beta)
+        self.assigner_o2o = TaskAlignedAssigner(topk=cfg.topk_o2o, num_classes=cfg.nc, alpha=cfg.alpha, beta=cfg.beta)
+        self.bbox_loss = BboxLoss(cfg.reg_max)
         self.bce = nn.BCEWithLogitsLoss(reduction="none")
 
-    # ---- tien xu ly GT: list[dict] -> tensor co padding ----
+    # ---- tiền xử lý GT: list[dict] -> tensor có padding ----
     def preprocess_targets(self, targets, batch_size, device):
         n_max = max((t["boxes"].shape[0] for t in targets), default=0)
         n_max = max(n_max, 1)
@@ -186,7 +147,16 @@ class FaceLandmarkDetectionLoss(nn.Module):
             gt_labels[i, :n, 0] = t["labels"].to(device)
             mask_gt[i, :n, 0] = True
             if "landmarks" in t and t["landmarks"] is not None and n > 0:
-                gt_landmarks[i, :n] = t["landmarks"].to(device)
+                lm = t["landmarks"]
+                if lm.shape[1] != K:
+                    raise ValueError(
+                        f"target['landmarks'] có K={lm.shape[1]} điểm nhưng "
+                        f"FaceLandmarkDetectionLoss được cấu hình num_landmarks="
+                        f"{K} (qua cfg.sync_num_landmarks). Kiểm tra lại "
+                        "cfg dùng cho head/loss có được sync đúng với "
+                        "dataset.num_landmarks hay không."
+                    )
+                gt_landmarks[i, :n] = lm.to(device)
                 if "landmarks_valid" in t and t["landmarks_valid"] is not None:
                     gt_lmk_valid[i, :n] = t["landmarks_valid"].to(device)
                 else:
@@ -194,12 +164,12 @@ class FaceLandmarkDetectionLoss(nn.Module):
 
         return gt_bboxes, gt_labels, mask_gt, gt_landmarks, gt_lmk_valid
 
-    # ---- gather target landmark PIXEL cho tung anchor theo target_gt_idx ----
+    # ---- gather target landmark PIXEL cho từng anchor theo target_gt_idx ----
     @staticmethod
     def _gather_landmark_targets(gt_landmarks, gt_lmk_valid, target_gt_idx, fg_mask):
         """
         -> target_landmarks_pixel (bs, A, K, 2), target_lmk_mask (bs, A) bool
-           (True = anchor la foreground VA GT tuong ung co nhan landmark)
+           (True = anchor là foreground VÀ GT tương ứng có nhãn landmark)
         """
         bs, M = gt_landmarks.shape[0], gt_landmarks.shape[1]
         batch_ind = torch.arange(bs, dtype=torch.long, device=gt_landmarks.device).unsqueeze(-1)
@@ -211,16 +181,17 @@ class FaceLandmarkDetectionLoss(nn.Module):
         target_lmk_mask = fg_mask & target_lmk_has_label
         return target_landmarks, target_lmk_mask
 
-    # ---- encode target landmark PIXEL -> chuan hoa theo GT box (mo rong margin) ----
+    # ---- encode target landmark PIXEL -> chuẩn hoá theo GT box (mở rộng margin) ----
     def _encode_landmark_targets(self, target_landmarks_pixel, target_bboxes_pixel):
         """
         target_landmarks_pixel: (bs, A, K, 2) pixel
-        target_bboxes_pixel   : (bs, A, 4) xyxy pixel - GT box DA MATCH
-                                 (tu assigner), ON DINH vi lay tu du lieu
-                                 that, khong phai box du doan.
-        -> target_norm (bs, A, K, 2) trong [0,1] (da clamp de an toan so
-           voi cac diem hiem gap vuot ra ngoai vung margin, tranh loss
-           bung no o vai outlier annotation).
+        target_bboxes_pixel   : (bs, A, 4) xyxy pixel - GT box ĐÃ MATCH
+                                 (từ assigner), ỔN ĐỊNH vì lấy từ dữ liệu
+                                 thật, không phải box dự đoán.
+        -> target_norm (bs, A, K, 2) trong [0,1] (đã clamp để an toàn với
+           các điểm hiếm gặp vượt ra ngoài vùng margin, tránh loss bùng
+           nổ ở vài outlier annotation - xem check_lmk_margin_coverage.py
+           để đo tỉ lệ điểm bị clamp này trên data thật của bạn).
         """
         x1, y1, x2, y2 = target_bboxes_pixel.unbind(-1)   # (bs,A)
         w, h = (x2 - x1), (y2 - y1)
@@ -235,12 +206,14 @@ class FaceLandmarkDetectionLoss(nn.Module):
         target_norm = torch.stack([tx, ty], dim=-1).clamp(0.0, 1.0)
         return target_norm
 
-    # ---- tinh loss cho 1 nhanh (o2m hoac o2o) ----
+    # ---- tính loss cho 1 nhánh (o2m hoặc o2o) ----
     def _branch_loss(self, assigner, cls_raw, box_pixel, reg_raw, lmk_raw, anchors, strides,
                       gt_bboxes, gt_labels, mask_gt, gt_landmarks, gt_lmk_valid):
         """
-        lmk_raw: (bs, K*2, A) logit THO (truoc sigmoid), dau ra truc tiep
-                 tu lmk_o2m/lmk_o2o trong head.
+        lmk_raw: (bs, K*2, A) logit THÔ (trước sigmoid), đầu ra trực tiếp
+                 từ lmk_o2m/lmk_o2o trong head. Đây là field DUY NHẤT của
+                 landmark mà loss đọc lúc train (không đọc "lmk" pixel -
+                 head v3 thậm chí không còn trả field đó lúc training).
         """
         bs = cls_raw.shape[0]
         A = cls_raw.shape[1]
@@ -261,10 +234,10 @@ class FaceLandmarkDetectionLoss(nn.Module):
 
         target_scores_sum = max(target_scores.sum().item(), 1)
 
-        # --- classification loss: giong het ban goc ---
+        # --- classification loss: giống hệt bản gốc ---
         loss_cls = self.bce(cls_raw, target_scores).sum() / target_scores_sum
 
-        # --- box + dfl loss: giong het ban goc, quy ve khong gian grid ---
+        # --- box + dfl loss: giống hệt bản gốc, quy về không gian grid ---
         pred_bboxes_grid = box_pixel / stride_b
         target_bboxes_grid = target_bboxes_pixel / stride_b
         loss_iou, loss_dfl = self.bbox_loss(
@@ -272,7 +245,7 @@ class FaceLandmarkDetectionLoss(nn.Module):
             target_scores, target_scores_sum, fg_mask,
         )
 
-        # --- landmark loss: khong gian chuan hoa theo GT box (on dinh) ---
+        # --- landmark loss: không gian chuẩn hoá theo GT box (ổn định) ---
         target_landmarks_pixel, target_lmk_mask = self._gather_landmark_targets(
             gt_landmarks, gt_lmk_valid, target_gt_idx, fg_mask
         )
@@ -290,8 +263,8 @@ class FaceLandmarkDetectionLoss(nn.Module):
             per_point = landmark_regression_loss(pred_sel, target_sel, self.lmk_loss_type)
             loss_lmk = (per_point * weight_sel).sum() / (weight_sel.sum() * K * 2 + 1e-9)
 
-        # --- geometric consistency loss (TUY CHON, ap len MOI anchor
-        #     duong, khong can landmark GT - xem docstring dau file) ---
+        # --- geometric consistency loss (TUỲ CHỌN, áp lên MỌI anchor
+        #     dương, không cần landmark GT - xem docstring đầu file) ---
         if self.geo_gain > 0 and self.geo_constraints and fg_mask.any():
             pred_fg = pred_lmk_norm[fg_mask]  # (n_fg, K, 2)
             loss_geo = geometric_consistency_loss(pred_fg, self.geo_constraints, self.geo_margin)
@@ -303,10 +276,12 @@ class FaceLandmarkDetectionLoss(nn.Module):
 
     def forward(self, preds, targets):
         """
-        preds: dict tu DetectHeadFaceLmk o che do train:
-               {"o2m": {"cls","box","reg_raw","lmk","lmk_raw"}, "o2o": {...},
+        preds: dict từ DetectHeadFaceLmk ở chế độ train:
+               {"o2m": {"cls","box","reg_raw","lmk_raw"}, "o2o": {...},
                 "anchors", "strides"}
-        targets: list[dict], xem docstring dau file.
+               (lưu ý: v3 không còn field "lmk" pixel lúc training, xem
+               head_face_landmark_v3.py)
+        targets: list[dict], xem docstring đầu file.
         """
         device = preds["anchors"].device
         batch_size = preds["o2o"]["cls"].shape[0]

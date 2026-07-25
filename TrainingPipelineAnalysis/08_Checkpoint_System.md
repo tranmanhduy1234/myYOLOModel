@@ -122,8 +122,8 @@ Khi huấn luyện xong mô hình NMS-Free Detector trên tập dữ liệu lớ
 
 Tệp `best_trunk.pt`:
 - Loại bỏ hoàn toàn các thông tin cồng kềnh của Optimizer, Scheduler hay trạng thái Epoch.
-- Trích xuất riêng phần bộ trích xuất đặc trưng **Backbone + Neck** kèm metadata cấu hình mạng.
-- Cho phép hàm `replace_head` trong `model.py` dễ dàng thay thế `DetectHead` mới, đóng băng Backbone (`freeze_trunk()`) và tiến hành fine-tune trên dữ liệu mới một cách cực kỳ gọn nhẹ.
+- Trích xuất cấu trúc mô hình (`backbone`, `neck`, `head`) kèm `meta` cấu hình mạng.
+- Khi chuyển giao tri thức (Transfer Learning) sang bài toán mới với số class khác, phương thức `load_feature_extractor()` chỉ nạp lại `backbone` và `neck`, kết hợp với `replace_head()` để gắn `DetectHead` mới và `freeze_trunk()` đóng băng backbone/neck một cách cực kỳ linh hoạt và gọn nhẹ.
 
 ---
 

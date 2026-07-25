@@ -26,7 +26,6 @@ from tqdm import tqdm
 # logger.info(...) ben duoi van tu dong co handler ngay khi setup_logging() chay.
 logger = logging.getLogger("train")
 
-
 def _ensure_text_logging(cfg: TrainConfig) -> None:
     """Khoi tao logging_setup 1 lan duy nhat. Neu noi goi khac (vd training.py)
     da goi setup_logging() truoc do roi thi bo qua, tranh mo 2 file .log khac
@@ -38,7 +37,6 @@ def _ensure_text_logging(cfg: TrainConfig) -> None:
         run_name=cfg.run_name,
         also_stdout=False,
     )
-
 
 def get_dataloader(cfg: TrainConfig):
     train_loader, val_loader, classes, num_classes = build_dataloaders(cfg)
@@ -73,7 +71,6 @@ def get_criterion(cfg: TrainConfig):
         o2o_weight=getattr(cfg, "w_o2o", 1.0)
     )
 
-
 def get_optimizer(model: NMSFreeDetector, cfg: TrainConfig):
     decay, no_decay = [], []
     for name, p in model.named_parameters():
@@ -97,7 +94,6 @@ def get_optimizer(model: NMSFreeDetector, cfg: TrainConfig):
         raise ValueError(f"Unknown optimizer: {cfg.optimizer}")
     return opt
 
-
 def lr_lambda_factory(cfg: TrainConfig, steps_per_epoch):
     warmup_steps = max(1, int(cfg.warmup_epochs * steps_per_epoch))
     total_steps = max(warmup_steps + 1, cfg.epochs * steps_per_epoch)
@@ -113,7 +109,6 @@ def lr_lambda_factory(cfg: TrainConfig, steps_per_epoch):
 
     return _lambda
 
-
 def move_batch(images, targets, device):
     images = images.to(device, non_blocking=True)
     targets = [
@@ -125,7 +120,6 @@ def move_batch(images, targets, device):
     ]
     return images, targets
 
-
 def train_one_epoch(model: NMSFreeDetector,
                     criterion: DetectionLoss, loader, optimizer,
                     scheduler, scaler, ema: ModelEMA, device, cfg: TrainConfig, epoch: int,
@@ -135,13 +129,12 @@ def train_one_epoch(model: NMSFreeDetector,
     running_loss = 0.0
     n_batches = len(loader)
     use_amp = scaler is not None
-
+    
     # Cac cong tac bat/tat tung loai log TensorBoard (giu nguyen y nghia nhu cfg
     # cu: cfg.log_gradients / cfg.log_weights); tan suat ghi (scalar vs histogram)
     # do TrainingLogger tu quan ly qua log_interval/histogram_interval.
     do_grad_log = tb_logger is not None and getattr(cfg, "log_gradients", True)
     do_weight_log = tb_logger is not None and getattr(cfg, "log_weights", True)
-
     
     pbar = tqdm(
             enumerate(loader),
@@ -254,7 +247,6 @@ def validate(model, criterion, loader, device, tb_logger: TrainingLogger = None,
         tb_logger.log_losses(last_items, step=epoch, phase="val")
 
     return total / max(1, n)
-
 
 def run_training(cfg: TrainConfig):
     _ensure_text_logging(cfg)

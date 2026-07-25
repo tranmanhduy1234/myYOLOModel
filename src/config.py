@@ -18,7 +18,7 @@ class TrainConfig:
     categories_filename: str = "categories.jsonl"
     train_image_path_map_filename: str = "images_train.jsonl"
     val_image_path_map_filename: str = "images_val.jsonl"
-
+    
     # 2) images_root_dir: chứa ảnh thật, CŨNG có 2 thư mục con train/ và val/
     #    (mỗi thư mục con lại chứa patch0/, patch1/, ...). Đường dẫn ảnh thật
     #    = images_root_dir / <images_train_subdir hoặc images_val_subdir> / path
