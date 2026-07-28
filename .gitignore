@@ -186,3 +186,5 @@ src/runtime/
 # Personal notes / config
 note.md
 CLAUDE.md
+
+setuptraining.txt

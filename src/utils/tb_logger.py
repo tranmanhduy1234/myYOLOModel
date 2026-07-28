@@ -67,6 +67,12 @@ class TrainingLogger:
         self.histogram_interval = histogram_interval
         self._grad_norm_buffer = []
 
+    def should_log_scalar(self, step: int) -> bool:
+        return self.log_interval > 0 and step % self.log_interval == 0
+
+    def should_log_hist(self, step: int) -> bool:
+        return self.histogram_interval > 0 and step % self.histogram_interval == 0
+
     # ==========================================================================
     # 0. SNAPSHOT THAM SO (dung cho log_weight_updates)
     # ==========================================================================
@@ -130,43 +136,39 @@ class TrainingLogger:
     # 2. GRADIENT
     # ==========================================================================
 
-    def log_gradients(self, model: nn.Module, step: int) -> float:
-        """Goi SAU loss.backward(), TRUOC optimizer.step() VA TRUOC clip_grad_norm_
-        (de thay dung do lon that cua gradient, khong bi che boi clipping).
-        Tra ve total_norm."""
-        do_hist = step % self.histogram_interval == 0
-        do_scalar = step % self.log_interval == 0
+    def log_gradients(self, model: nn.Module, step: int, total_norm: Optional[float] = None) -> float:
+        """Goi SAU clip_grad_norm_. total_norm nen lay tu gia tri tra ve cua
+        clip_grad_norm_ (da tinh san, khong can tinh lai). Neu khong nam trong
+        log_interval/histogram_interval hien tai thi bo qua hoan toan viec duyet
+        param (histogram/RMS ton chi phi, chi lam khi thuc su can ghi)."""
+        do_hist = self.should_log_hist(step)
+        do_scalar = self.should_log_scalar(step)
+        if not (do_hist or do_scalar):
+            return total_norm if total_norm is not None else 0.0
 
-        total_norm_sq = 0.0
         for name, param in model.named_parameters():
             if param.grad is None or param.grad.numel() == 0:
                 continue
-            # torch's add_histogram tu crash (ValueError: histogram is empty) neu
-            # tensor chua NaN/Inf - thuong la dau hieu gradient bi no (explode),
-            # khong phai loi cua logging. Bo qua histogram cho param nay va canh
-            # bao, thay vi de crash toan bo training.
             if do_hist:
                 if torch.isfinite(param.grad).all():
                     self.writer.add_histogram(f"Gradients/{name}", param.grad, step)
                 else:
                     _log.warning(
                         f"[TrainingLogger] Bo qua histogram gradient '{name}' o step {step}: "
-                        f"gradient co gia tri NaN/Inf (co the do loss/learning rate dang phan ky)."
+                        f"gradient co gia tri NaN/Inf."
                     )
             if do_scalar:
                 rms = param.grad.norm().item() / math.sqrt(param.data.numel())
                 self.writer.add_scalar(f"Gradients_RMS/{name}", rms, step)
-            total_norm_sq += param.grad.data.norm(2).item() ** 2
 
-        total_norm = total_norm_sq ** 0.5
-        if do_scalar:
+        if do_scalar and total_norm is not None:
             self.writer.add_scalar("Gradients/total_norm", total_norm, step)
             self._grad_norm_buffer.append(total_norm)
             if len(self._grad_norm_buffer) > 100:
                 self._grad_norm_buffer.pop(0)
             avg_norm = sum(self._grad_norm_buffer) / len(self._grad_norm_buffer)
             self.writer.add_scalar("Gradients/avg_norm", avg_norm, step)
-        return total_norm
+        return total_norm if total_norm is not None else 0.0
 
     # ==========================================================================
     # 3. WEIGHT / BIAS
@@ -174,9 +176,11 @@ class TrainingLogger:
 
     def log_weights(self, model: nn.Module, step: int) -> None:
         """Goi SAU optimizer.step()."""
-        if step % self.log_interval != 0:
+        do_scalar = self.should_log_scalar(step)
+        do_hist = self.should_log_hist(step)
+
+        if not (do_scalar or do_hist):
             return
-        do_hist = step % self.histogram_interval == 0
 
         for name, param in model.named_parameters():
             w = param.data
@@ -188,15 +192,16 @@ class TrainingLogger:
                         f"[TrainingLogger] Bo qua histogram weight '{name}' o step {step}: "
                         f"trong so co gia tri NaN/Inf."
                     )
-            self.writer.add_scalar(f"Weights_Stats/{name}/mean", w.mean().item(), step)
-            self.writer.add_scalar(f"Weights_Stats/{name}/std", w.std().item(), step)
-            self.writer.add_scalar(f"Weights_Stats/{name}/rms", w.norm().item() / math.sqrt(w.numel()), step)
-            self.writer.add_scalar(f"Weights_Stats/{name}/max", w.max().item(), step)
-            self.writer.add_scalar(f"Weights_Stats/{name}/min", w.min().item(), step)
+            if do_scalar:
+                self.writer.add_scalar(f"Weights_Stats/{name}/mean", w.mean().item(), step)
+                self.writer.add_scalar(f"Weights_Stats/{name}/std", w.std().item(), step)
+                self.writer.add_scalar(f"Weights_Stats/{name}/rms", w.norm().item() / math.sqrt(w.numel()), step)
+                self.writer.add_scalar(f"Weights_Stats/{name}/max", w.max().item(), step)
+                self.writer.add_scalar(f"Weights_Stats/{name}/min", w.min().item(), step)
 
     def log_weight_updates(self, model: nn.Module, prev_params: Dict[str, torch.Tensor], step: int) -> None:
         """update_ratio = |delta_w| / |w_truoc|. prev_params lay tu snapshot_params()."""
-        if step % self.log_interval != 0:
+        if not self.should_log_scalar(step):
             return
         for name, param in model.named_parameters():
             if name not in prev_params:
@@ -212,7 +217,7 @@ class TrainingLogger:
     # ==========================================================================
 
     def log_learning_rate(self, optimizer: torch.optim.Optimizer, step: int, epoch: Optional[int] = None) -> None:
-        if step % self.log_interval != 0:
+        if not self.should_log_scalar(step):
             return
         for i, param_group in enumerate(optimizer.param_groups):
             self.writer.add_scalar(f"Learning_Rate/group_{i}", param_group["lr"], step)
@@ -226,7 +231,7 @@ class TrainingLogger:
     # ==========================================================================
 
     def log_ema(self, ema, step: int) -> None:
-        if ema is None:
+        if ema is None or not self.should_log_scalar(step):
             return
         current_decay = ema._current_decay()
         self.writer.add_scalar("EMA/current_decay", current_decay, step)
@@ -236,7 +241,7 @@ class TrainingLogger:
 
     def log_ema_params(self, ema_model: Optional[nn.Module], step: int, prefix: str = "EMA") -> None:
         """Norm tong cua tham so model EMA - ton chi phi hon log_ema(), nen gate theo log_interval."""
-        if ema_model is None or step % self.log_interval != 0:
+        if ema_model is None or not self.should_log_scalar(step):
             return
         total_norm_sq = 0.0
         param_count = 0
@@ -252,7 +257,7 @@ class TrainingLogger:
     # ==========================================================================
 
     def log_gpu_memory(self, step: int) -> None:
-        if not torch.cuda.is_available():
+        if not torch.cuda.is_available() or not self.should_log_scalar(step):
             return
         allocated = torch.cuda.memory_allocated() / 1024**3
         reserved = torch.cuda.memory_reserved() / 1024**3
@@ -264,7 +269,7 @@ class TrainingLogger:
 
     def log_batchnorm(self, model: nn.Module, step: int) -> None:
         """Ton chi phi (duyet toan bo module) - chi ghi theo histogram_interval."""
-        if step % self.histogram_interval != 0:
+        if not self.should_log_hist(step):
             return
         for name, module in model.named_modules():
             if not isinstance(module, nn.BatchNorm2d):
@@ -299,6 +304,8 @@ class TrainingLogger:
             f"- epochs: {cfg.epochs}",
             f"- batch_size: {cfg.batch_size}",
             f"- img_size: {cfg.img_size}",
+            f"- val_interval_steps: {getattr(cfg, 'val_interval_steps', 'N/A')}",
+            f"- save_ckpt_interval_steps: {getattr(cfg, 'save_ckpt_interval_steps', 'N/A')}",
             f"- lr0: {cfg.lr0}",
             f"- lr_min_factor: {cfg.lr_min_factor}",
             f"- warmup_epochs: {cfg.warmup_epochs}",

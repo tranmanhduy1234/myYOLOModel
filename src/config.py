@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Tuple, Optional, List
 
 @dataclass
 class TrainConfig:
@@ -35,7 +35,7 @@ class TrainConfig:
     include_images_without_annotations: bool = False  # có lấy ảnh "rỗng" (sau lọc top-80) làm sample hay không
 
     img_size: int = 480
-    batch_size: int = 4
+    batch_size: int = 16
     num_workers: int = 4
     pin_memory: bool = True
     shuffle: bool = True
@@ -46,17 +46,11 @@ class TrainConfig:
 
     # ---- Data Augment ----
     horizontalFlip: float = 0.5
-    shiftScaleRotate: tuple = (0.03, 0.03, 5, 0.3)   # shift_limit, scale_limit, rotate_limit, p
-    randomBrightnessContrast: float = 0.15
-    hueSaturationValue: tuple = (5, 8, 5, 0.1)       # hue_shift_limit, sat_shift_limit, val_shift_limit, p
-    gaussNoise: tuple = (5.0, 15.0, 0.1)             # var_limit(a, b), p
-    blur: tuple = (3, 0.05)                          # (blur_limit, p)
- 
-    # ---- Augmentation (cờ tổng - bật/tắt augment và 2 xác suất dùng riêng
-    # ngoài bộ albumentations phía trên, giữ nguyên từ bản config bạn gửi) ----
-    augment: bool = True
-    hflip_p: float = 0.5
-    color_jitter_p: float = 0.5
+    shiftScaleRotate: tuple = (0.08, 0.10, 15, 0.8)
+    randomBrightnessContrast: float = 0.4
+    hueSaturationValue: tuple = (15, 20, 15, 0.3)
+    gaussNoise: tuple = (5.0, 25.0, 0.25)
+    blur: tuple = (5, 0.15)
 
     # ---- Model ----
     nc: int = 80
@@ -72,12 +66,10 @@ class TrainConfig:
     lr_min_factor: float = 0.01   # LR cuối = lr0 * lr_min_factor (cosine)
     weight_decay: float = 5e-4
     warmup_epochs: float = 3.0
-    warmup_bias_lr: float = 0.1
-    momentum: float = 0.9         # dùng cho SGD, không dùng nếu optimizer=adamw
     optimizer: str = "adamw"      # "adamw" | "sgd"
     grad_clip_norm: float = 10.0
-    esp: float = 1e-6             # eps cho optimizer (giữ nguyên tên như bản gốc)
     betas: tuple = (0.9, 0.98)
+    momentum: float = 0.937       # dùng khi optimizer="sgd"
 
     # ---- Loss weights (truyền thẳng xuống DetectionLoss) ----
     cls_gain: float = 1.0
@@ -101,21 +93,36 @@ class TrainConfig:
     run_name: str = "train"       # Tiền tố tên file .log (train_{timestamp}.log)
     log_gradients: bool = True    # Log gradient histogram & RMSNorm
     log_weights: bool = True      # Log weight/bias histogram, STD & RMSNorm
-    log_hist_interval: int = 100  # Số step giữa 2 lần log histogram (tránh log quá dày làm chậm/nặng)
+    log_hist_interval: int = 500  # Số step giữa 2 lần log histogram (đặt lớn như 500/1000 để giảm nhe/tăng tốc training, đặt <= 0 để tắt hẳn)
 
     # ---- Runtime ----
     device: str = "cuda"          # sẽ tự fallback về cpu nếu không có GPU
     amp: bool = True              # mixed precision
-    scale: bool = True
-    log_interval: int = 20        # số step giữa 2 lần log
-    val_interval: int = 1         # số epoch giữa 2 lần validate
+    log_interval: int = 500        # số step giữa 2 lần log chi tiết (breakdown loss, lr, ema, gpu)
+    log_loss_interval: int = 50    # số step giữa 2 lần log loss (nhẹ, ghi thường xuyên hơn log_interval)
+    val_interval_steps: int = 5000 # số step giữa 2 lần validate
+    save_ckpt_interval_steps: int = 1000 # số step giữa 2 lần lưu checkpoint định kỳ
     ckpt_dir: str = "./checkpoints"
-    resume: str = ""              # path checkpoint để resume, rỗng = train từ đầu
+    resume: str = ""              # path checkpoint để resume (vd: checkpoints/last.pt), rỗng = train từ đầu
     save_best_only: bool = False  # False -> lưu thêm checkpoint định kỳ
+    ckpt_keep_last: int = 3       # số checkpoint định kỳ (theo global_step) giữ lại, <=0 = giữ hết
+
+    # Transfer Learning Config
+    enable_transfer_learning: bool = False         # Cờ bật/tắt chế độ Transfer Learning (Face Landmark)
+    tfl_pretrained_pth: str = ""                   # Đường dẫn checkpoint pretrained (trunks/weights) để load fine-tune
+    tfl_freeze_backbone: bool = False              # Đóng băng trọng số Backbone khi fine-tune
+    tfl_freeze_neck: bool = False                  # Đóng băng trọng số Neck khi fine-tune
     
-    checkpoint_ema: str = "" # Save only 
-    checkpoint: str = "" # Save checkpoint when training main model, save optimizer, scaler, ...etc
-    weight_statedict_model: str = "" # Save weight parameters of only model, all function to take weight in model.py (all config model and parts)
+    tfl_num_landmarks: Optional[int] = 5           # Số lượng điểm landmark (vd: 5 cho RetinaFace, 478 cho MediaPipe)
+    tfl_lmk_margin: float = 0.15                   # Tỷ lệ % w/h bbox mở rộng làm vùng chứa landmark
+    tfl_lmk_gain: float = 1.0                      # Trọng số Loss cho Landmark Regression
+    tfl_geo_gain: float = 0.0                      # Trọng số Loss cho Geometric Consistency (0.0 = tắt)
+    tfl_lmk_loss_type: str = "smooth_l1"           # Loại Landmark Loss ("smooth_l1" | "wing")
+    tfl_geo_margin: float = 0.02                   # Margin khoảng cách phạt vi phạm ràng buộc hình học
+    
+    tfl_dataset_root: str = ""                     # Đường dẫn thư mục chứa dataset Transfer Learning
+    tfl_jsonl_name: str = "annotations_all.jsonl"  # Tên file chứa nhãn JSONL của dataset face landmark
+    tfl_min_box_size_px: float = 2.0               # Lọc bỏ các bbox nhỏ hơn ngưỡng px này
     
     def __post_init__(self):
         assert len(self.shiftScaleRotate) == 4, \
@@ -126,6 +133,8 @@ class TrainConfig:
             "gaussNoise cần đúng 3 phần tử: (var_min, var_max, p)"
         assert len(self.blur) == 2, \
             "blur cần đúng 2 phần tử: (blur_limit, p)"
+        assert self.log_interval > 0, "log_interval phải > 0"
+        assert self.log_loss_interval > 0, "log_loss_interval phải > 0"
         assert self.num_workers >= 0, "num_workers không được âm"
         assert self.prefetch_factor is None or self.prefetch_factor >= 1, \
             "prefetch_factor phải >= 1 (hoặc None nếu num_workers=0)"

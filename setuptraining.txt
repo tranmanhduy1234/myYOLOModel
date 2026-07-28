@@ -1,0 +1,13 @@
+- Tạo SSH key trên máy Ubuntu: ssh-keygen -t ed25519 -C "your_email@example.com"
+- Get ssh key: cat ~/.ssh/id_ed25519.pub
+- download pytorch: pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+- download miniconda: 
+    + curl -O https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+    + bash ~/Miniconda3-latest-Linux-x86_64.sh
+    + source ~/.bashrc
+- download huggingface cli: pip install -U huggingface_hub
+- login huggingface: hf auth login
+- download gdown: pip install -U gdown
+    + dowload file on gg drive: gdown <URL hoặc FILE_ID>
+- create moi truong conda: conda create -n name_env python=3.10
+- huggingface-key: 

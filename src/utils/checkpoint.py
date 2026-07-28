@@ -9,12 +9,14 @@ def save_checkpoint(
     scheduler,
     ema,
     epoch: int,
+    global_step: int,
     best_val: float,
     cfg,
 ) -> None:
     """Luu toan bo trang thai training vao 1 file .pt."""
     ckpt = {
         "epoch": epoch,
+        "global_step": global_step,
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
         "scheduler": scheduler.state_dict(),
@@ -33,11 +35,11 @@ def load_checkpoint(
     scheduler=None,
     ema=None,
     map_location: str = "cpu",
-) -> Tuple[int, float]:
+) -> Tuple[int, int, float]:
     """Nap checkpoint day du (model + optimizer + scheduler + ema neu co).
 
     Returns:
-        (epoch, best_val) da luu trong checkpoint (mac dinh (0, inf) neu khong co).
+        (epoch, global_step, best_val) da luu trong checkpoint (mac dinh (0, 0, inf) neu khong co).
     """
     ckpt = torch.load(path, map_location=map_location)
     model.load_state_dict(ckpt["model"])
@@ -47,7 +49,7 @@ def load_checkpoint(
         scheduler.load_state_dict(ckpt["scheduler"])
     if ema is not None and "ema" in ckpt:
         ema.load_state_dict(ckpt["ema"])
-    return ckpt.get("epoch", 0), ckpt.get("best_val", float("inf"))
+    return ckpt.get("epoch", 0), ckpt.get("global_step", 0), ckpt.get("best_val", float("inf"))
 
 def load_model_only(path: str, model: torch.nn.Module, map_location: str = "cpu") -> None:
     """Chi nap trong so model (dung khi fine-tune / inference, khong can optimizer)."""

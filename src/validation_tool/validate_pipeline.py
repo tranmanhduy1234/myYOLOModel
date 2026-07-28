@@ -266,7 +266,7 @@ def test_engine(device: str, R: Reporter):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "ckpt.pt")
-            save_checkpoint(path, m1, opt1, sch1, ema1, epoch=3, best_val=1.234, cfg=cfg)
+            save_checkpoint(path, m1, opt1, sch1, ema1, epoch=3, global_step=30, best_val=1.234, cfg=cfg)
             assert os.path.isfile(path), "save_checkpoint phải tạo file trên đĩa"
 
             m2   = NMSFreeDetector(**SMALL).to(device)
@@ -274,14 +274,14 @@ def test_engine(device: str, R: Reporter):
             sch2 = torch.optim.lr_scheduler.LambdaLR(opt2, lr_lambda_factory(cfg, 10))
             ema2 = ModelEMA(m2, decay=0.99, warmup_updates=5)
 
-            epoch, best_val = load_checkpoint(path, m2, opt2, sch2, ema2, map_location=str(device))
-            assert epoch == 3 and abs(best_val - 1.234) < 1e-6, "epoch/best_val phải được khôi phục chính xác"
+            epoch, global_step, best_val = load_checkpoint(path, m2, opt2, sch2, ema2, map_location=str(device))
+            assert epoch == 3 and global_step == 30 and abs(best_val - 1.234) < 1e-6, "epoch/global_step/best_val phải được khôi phục chính xác"
             for (n1, p1), (n2, p2) in zip(m1.named_parameters(), m2.named_parameters()):
                 assert torch.allclose(p1, p2), f"trọng số model phải khớp sau load_checkpoint ('{n1}')"
             assert sch2.get_last_lr() == sch1.get_last_lr(), "scheduler state (LR hiện tại) phải khớp sau resume"
             for (n1, p1), (n2, p2) in zip(ema1.ema.named_parameters(), ema2.ema.named_parameters()):
                 assert torch.allclose(p1, p2), f"trọng số EMA phải khớp sau load_checkpoint ('{n1}')"
-        return "save_checkpoint -> load_checkpoint: model/optimizer/scheduler/ema/epoch/best_val đều khớp"
+        return "save_checkpoint -> load_checkpoint: model/optimizer/scheduler/ema/epoch/global_step/best_val đều khớp"
     R.check("engine", "save_checkpoint()/load_checkpoint(): round-trip đầy đủ (model+opt+sched+ema+meta)", t_checkpoint_roundtrip)
 
     def t_checkpoint_without_ema():
@@ -294,12 +294,12 @@ def test_engine(device: str, R: Reporter):
 
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "ckpt_no_ema.pt")
-            save_checkpoint(path, m, opt, sch, ema=None, epoch=1, best_val=2.5, cfg=cfg)
+            save_checkpoint(path, m, opt, sch, ema=None, epoch=1, global_step=10, best_val=2.5, cfg=cfg)
             m2  = NMSFreeDetector(**SMALL).to(device)
             opt2 = get_optimizer(m2, cfg)
             sch2 = torch.optim.lr_scheduler.LambdaLR(opt2, lr_lambda_factory(cfg, 10))
-            epoch, best_val = load_checkpoint(path, m2, opt2, sch2, ema=None, map_location=str(device))
-            assert epoch == 1 and abs(best_val - 2.5) < 1e-6
+            epoch, global_step, best_val = load_checkpoint(path, m2, opt2, sch2, ema=None, map_location=str(device))
+            assert epoch == 1 and global_step == 10 and abs(best_val - 2.5) < 1e-6
         return "save/load checkpoint không có EMA (ema=None) hoạt động đúng"
     R.check("engine", "save/load checkpoint không có EMA (ema=None) không crash", t_checkpoint_without_ema)
 

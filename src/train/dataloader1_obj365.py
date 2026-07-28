@@ -3,6 +3,8 @@ import json
 import random
 import pickle
 import inspect
+import threading
+from datetime import datetime
 from dataclasses import dataclass
 from collections import defaultdict
 
@@ -72,6 +74,24 @@ class DetectionAugmenter:
             print(f"[Augmenter][Warning] Bỏ qua augment do lỗi: {e}")
             return image, boxes, labels
         
+_ERROR_LOG_LOCK = threading.Lock()
+
+def _log_bad_sample(error_log_path, split_name, image_id, index, error):
+    """Ghi lai 1 dong vao file log rieng cho cac sample bi loi (anh hong, thieu
+    file, jsonl hong, ...), phuc vu sau nay thong ke/lam sach du lieu. Khong
+    lam gian doan training neu chinh viec ghi log nay that bai (best-effort)."""
+    if not error_log_path:
+        return
+    try:
+        os.makedirs(os.path.dirname(error_log_path) or ".", exist_ok=True)
+        line = (f"{datetime.now().isoformat()}\tsplit={split_name}\t"
+                f"image_id={image_id}\tindex={index}\terror={error}\n")
+        with _ERROR_LOG_LOCK:
+            with open(error_log_path, "a", encoding="utf-8") as f:
+                f.write(line)
+    except Exception:
+        pass  # ghi log la phu, khong duoc phep lam crash luong data chinh
+
 def letterbox(image, new_size, color=(114, 114, 114)):
     h, w = image.shape[:2]
     scale = min(new_size / h, new_size / w)
@@ -92,15 +112,25 @@ def build_id_offset_index(jsonl_path, id_field="id", cache_path=None, force_rebu
 
     print(f"[Data] Đang build id->offset index từ: {jsonl_path} ...")
     index = {}
+    n_bad = 0
     with open(jsonl_path, "rb") as f:
         offset = f.tell()
         line = f.readline()
         while line:
             if line.strip():
-                record = json.loads(line)
-                index[record[id_field]] = offset
+                try:
+                    record = json.loads(line)
+                    index[record[id_field]] = offset
+                except Exception as e:
+                    # Dong jsonl hong (JSON invalid, thieu id_field...) - bo qua
+                    # dong nay thay vi lam crash toan bo qua trinh build index.
+                    n_bad += 1
+                    print(f"[Data][Warning] Bỏ qua dòng hỏng tại offset={offset} "
+                          f"trong '{jsonl_path}': {e}")
             offset = f.tell()
             line = f.readline()
+    if n_bad:
+        print(f"[Data][Warning] Tổng cộng {n_bad:,} dòng hỏng bị bỏ qua khi build index từ '{jsonl_path}'.")
     print(f"[Data] Xong: {len(index):,} dòng đã được index.")
     
     if cache_path:
@@ -118,17 +148,26 @@ def build_annotation_group_index(annotations_path, cache_path=None, force_rebuil
         
     print(f"[Data] Đang build annotation index (group theo image_id) từ: {annotations_path} ...")
     index = defaultdict(list)
+    n_bad = 0
     with open(annotations_path, "rb") as f:
         offset = f.tell()
         line = f.readline()
         while line:
             if line.strip():
-                record = json.loads(line)
-                index[record["image_id"]].append(offset)
+                try:
+                    record = json.loads(line)
+                    index[record["image_id"]].append(offset)
+                except Exception as e:
+                    # Dong annotation hong - bo qua, khong lam crash toan bo build index.
+                    n_bad += 1
+                    print(f"[Data][Warning] Bỏ qua annotation hỏng tại offset={offset} "
+                          f"trong '{annotations_path}': {e}")
             offset = f.tell()
             line = f.readline()
     index = dict(index)
     n_ann = sum(len(v) for v in index.values())
+    if n_bad:
+        print(f"[Data][Warning] Tổng cộng {n_bad:,} annotation hỏng bị bỏ qua khi build index từ '{annotations_path}'.")
     print(f"[Data] Xong: {len(index):,} ảnh có annotation, tổng {n_ann:,} annotation.")
     
     if cache_path:
@@ -146,13 +185,22 @@ def load_image_path_map(path_map_file, cache_path=None, force_rebuild=False):
         
     print(f"[Data] Đang load image_path_map từ: {path_map_file} ...")
     mapping = {}
+    n_bad = 0
     with open(path_map_file, "r", encoding="utf-8") as f:
-        for line in f:
+        for line_no, line in enumerate(f):
             line = line.strip()
             if not line:
                 continue
-            rec = json.loads(line)
-            mapping[rec["image_name"]] = rec["path"]
+            try:
+                rec = json.loads(line)
+                mapping[rec["image_name"]] = rec["path"]
+            except Exception as e:
+                # Dong path-map hong - bo qua, khong lam crash toan bo qua trinh load.
+                n_bad += 1
+                print(f"[Data][Warning] Bỏ qua dòng hỏng (dòng số {line_no}) "
+                      f"trong '{path_map_file}': {e}")
+    if n_bad:
+        print(f"[Data][Warning] Tổng cộng {n_bad:,} dòng hỏng bị bỏ qua khi load '{path_map_file}'.")
     print(f"[Data] Xong: {len(mapping):,} ảnh trong image_path_map.")
     if cache_path:
         os.makedirs(os.path.dirname(cache_path), exist_ok=True)
@@ -179,7 +227,8 @@ class ObjectDetectionDataset(Dataset):
                  images_root_dir, images_split_dir, cat_id_to_idx, image_ids,
                  images_offset_index, ann_group_index,
                  imgsz=480, augmenter=None,
-                 skip_iscrowd=True, skip_isfake=True):
+                 skip_iscrowd=True, skip_isfake=True,
+                 split_name="train", error_log_path=None, max_load_retries=10):
         self.images_info_path = images_info_path
         self.annotations_path = annotations_path
         self.image_path_map = image_path_map
@@ -192,7 +241,16 @@ class ObjectDetectionDataset(Dataset):
         self.augmenter = augmenter
         self.skip_iscrowd = skip_iscrowd
         self.skip_isfake = skip_isfake
-        
+
+        # --- Chiu loi (fault tolerance) ---
+        # split_name/error_log_path: dung de ghi lai sample nao bi loi vao 1 file
+        # rieng (khong lam gian doan training). max_load_retries: so lan toi da
+        # thu lay 1 sample thay the khac khi sample hien tai bi loi, tranh de qui
+        # vo han neu toan bo dataset deu hong (truong hop hy huu nhung can phong).
+        self.split_name = split_name
+        self.error_log_path = error_log_path
+        self.max_load_retries = max(1, int(max_load_retries))
+
         n_ann = sum(len(self.ann_group_index.get(i, [])) for i in self.image_ids)
         print(f"[Data] Dataset sẵn sàng với {len(self.image_ids):,} ảnh, {n_ann:,} annotation "
               f"(augment={'ON' if augmenter is not None else 'OFF'}). RAM cho pixel data: ~0MB.")
@@ -217,7 +275,11 @@ class ObjectDetectionDataset(Dataset):
                 records.append(json.loads(f.readline()))
         return records
 
-    def __getitem__(self, index):
+    def _load_item(self, index):
+        """Logic doc 1 sample GOC, giu nguyen 100% nhu truoc - khong sua doi
+        input/output. Co the nem exception (jsonl hong, thieu file_name trong
+        path map, anh khong doc duoc, anh sai dinh dang...); ben goi
+        (__getitem__) chiu trach nhiem bat loi va retry."""
         image_id = self.image_ids[index]
         info = self._read_image_info(image_id)
         
@@ -232,6 +294,11 @@ class ObjectDetectionDataset(Dataset):
         img_bgr = cv2.imread(img_path)
         if img_bgr is None:
             raise FileNotFoundError(f"Không thể đọc tệp ảnh tại đường dẫn: {img_path}")
+        if img_bgr.ndim != 3 or img_bgr.shape[2] != 3:
+            raise ValueError(
+                f"Ảnh tại '{img_path}' có shape bất thường {img_bgr.shape} (kỳ vọng H,W,3) - "
+                f"có thể là ảnh grayscale/CMYK/hỏng."
+            )
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         
         if img_rgb.shape[0] == self.imgsz and img_rgb.shape[1] == self.imgsz:
@@ -287,6 +354,35 @@ class ObjectDetectionDataset(Dataset):
             
         target = {"boxes": boxes_tensor, "labels": labels_tensor}
         return img_tensor, target
+
+    def __getitem__(self, index):
+        """Wrapper chiu loi cho _load_item: neu sample tai index bi loi (jsonl
+        hong, thieu anh, anh khong doc duoc...), log lai canh bao + ghi vao
+        error_log_path (neu co) roi THU LAY MOT SAMPLE NGAU NHIEN KHAC thay
+        the, thay vi de exception lam crash ca worker/training. Gioi han
+        max_load_retries lan de tranh de qui vo han neu du lieu hong dien
+        rong (truong hop hy huu)."""
+        last_err = None
+        cur_index = index
+        for attempt in range(self.max_load_retries):
+            try:
+                return self._load_item(cur_index)
+            except Exception as e:
+                last_err = e
+                image_id = self.image_ids[cur_index] if cur_index < len(self.image_ids) else "?"
+                print(f"[Data][Warning] Lỗi khi đọc sample idx={cur_index} "
+                      f"(image_id={image_id}, lần thử {attempt + 1}/{self.max_load_retries}): {e} "
+                      f"- thử lấy sample khác thay thế.")
+                _log_bad_sample(self.error_log_path, self.split_name, image_id, cur_index, e)
+                cur_index = random.randint(0, len(self) - 1)
+
+        # Het so lan retry cho phep ma van loi -> khong con cach nao khac,
+        # nem loi that ra ngoai de nguoi dung biet du lieu dang co van de
+        # nghiem trong (thay vi lang le tao vong lap vo han).
+        raise RuntimeError(
+            f"Không thể load được sample sau {self.max_load_retries} lần thử liên tiếp "
+            f"(bắt đầu từ index={index}, split={self.split_name}). Lỗi gần nhất: {last_err}"
+        )
     
 def collate_fn(batch):
     imgs, targets = zip(*batch)
@@ -323,6 +419,17 @@ def _build_split_dataset(cfg: TrainConfig, split_dir, is_train, image_path_map_f
         image_ids = [i for i in image_ids if ann_group_index.get(i)]
         
     augmenter = DetectionAugmenter(cfg) if is_train else None
+
+    # error_log_path/max_load_retries: cau hinh tuy chon (getattr + default an
+    # toan) de khong bat buoc phai sua config.py - neu cfg khong co field nay
+    # thi dung mac dinh log_dir/bad_samples_{split}.log va 10 lan retry.
+    log_dir = getattr(cfg, "log_dir", "./logs")
+    error_log_path = getattr(
+        cfg, "data_error_log_path",
+        os.path.join(log_dir, f"bad_samples_{split_name}.log")
+    )
+    max_load_retries = getattr(cfg, "max_load_retries", 10)
+
     return ObjectDetectionDataset(
         images_info_path=images_info_path,
         annotations_path=annotations_path,
@@ -337,6 +444,9 @@ def _build_split_dataset(cfg: TrainConfig, split_dir, is_train, image_path_map_f
         augmenter=augmenter,
         skip_iscrowd=cfg.skip_iscrowd,
         skip_isfake=cfg.skip_isfake,
+        split_name=split_name,
+        error_log_path=error_log_path,
+        max_load_retries=max_load_retries,
     )
 
 def build_dataloaders(cfg: TrainConfig):
