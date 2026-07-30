@@ -15,21 +15,14 @@ from src.train.ema import ModelEMA
 from src.train.dataloader1_obj365 import build_dataloaders
 from src.config import TrainConfig
 from src.utils.seed import set_seed
-from src.utils.checkpoint import load_checkpoint, save_checkpoint
+from src.utils.checkpoint import load_checkpoint, save_checkpoint, load_model_only
 from src.utils.logging_setup import setup_logging
 from src.utils.tb_logger import TrainingLogger
 from tqdm import tqdm
 
-# Logger text (ghi file .log) - dung chung 1 logger ten "train" xuyen suot module.
-# logging.getLogger("train") tra ve CUNG 1 object moi lan goi, nen du duoc lay
-# truoc khi setup_logging() gan handler (xem _ensure_text_logging), cac loi goi
-# logger.info(...) ben duoi van tu dong co handler ngay khi setup_logging() chay.
 logger = logging.getLogger("train")
 
 def _ensure_text_logging(cfg: TrainConfig) -> None:
-    """Khoi tao logging_setup 1 lan duy nhat. Neu noi goi khac (vd training.py)
-    da goi setup_logging() truoc do roi thi bo qua, tranh mo 2 file .log khac
-    timestamp cho cung 1 lan chay."""
     if logger.handlers:
         return
     setup_logging(
@@ -52,9 +45,13 @@ def get_dataloader(cfg: TrainConfig):
     return train_loader, val_loader, classes, num_classes
 
 def get_model(cfg: TrainConfig):
-    return NMSFreeDetector(nc=cfg.nc, reg_max=cfg.reg_max,
+    model = NMSFreeDetector(nc=cfg.nc, reg_max=cfg.reg_max,
                            backbone_w=cfg.backbone_w, backbone_n=cfg.backbone_n,
                            neck_n=cfg.neck_n, strides=cfg.strides)
+    # LOAD PRE MODEL
+    # load_model_only(model=model, path="/run/media/tranmanhduy/Data/Ending/ckpt_step00160000.pt", map_location="cuda")
+    # print("load last model successful")
+    return model
 
 def get_criterion(cfg: TrainConfig):
     return DetectionLoss(
@@ -146,9 +143,6 @@ def train_one_epoch(model: NMSFreeDetector,
     n_batches = len(loader)
     use_amp = scaler is not None
     
-    # Cac cong tac bat/tat tung loai log TensorBoard (giu nguyen y nghia nhu cfg
-    # cu: cfg.log_gradients / cfg.log_weights); tan suat ghi (scalar vs histogram)
-    # do TrainingLogger tu quan ly qua log_interval/histogram_interval.
     do_grad_log = tb_logger is not None and getattr(cfg, "log_gradients", True)
     do_weight_log = tb_logger is not None and getattr(cfg, "log_weights", True)
     
@@ -156,7 +150,7 @@ def train_one_epoch(model: NMSFreeDetector,
     save_ckpt_interval_steps = getattr(cfg, "save_ckpt_interval_steps", 1000)
     log_interval = getattr(cfg, "log_interval", 0)
     loss_log_interval = getattr(cfg, "log_loss_interval", 50)
-
+    
     pbar = tqdm(
             enumerate(loader),
             total=n_batches,
@@ -168,9 +162,6 @@ def train_one_epoch(model: NMSFreeDetector,
     for step, (images, targets) in pbar:
         images, targets = move_batch(images, targets, device)
         global_step += 1
-
-        # Chup tham so TRUOC khi update, de sau nay tinh Update_Ratio (delta_w / w).
-        # Chi can chup khi buoc nay thuc su se log weight_updates (theo log_interval).
         do_snapshot = do_weight_log and tb_logger.should_log_scalar(global_step)
         prev_params = TrainingLogger.snapshot_params(model) if do_snapshot else None
 
@@ -259,7 +250,6 @@ def train_one_epoch(model: NMSFreeDetector,
 
     return running_loss / max(1, n_batches), global_step, best_val
 
-
 @torch.no_grad()
 def validate(model, criterion, loader, device, tb_logger: TrainingLogger = None, step: int = 0):
     model.eval()
@@ -331,7 +321,7 @@ def run_training(cfg: TrainConfig):
             global_step=global_step, best_val=best_val, tb_logger=tb_logger
         )
         logger.info(f"[epoch {epoch}] train_loss={train_loss:.4f} (global_step={global_step})")
-
+    
     # Kiểm tra validate & checkpoint lần cuối khi kết thúc training
     if val_loader is not None:
         eval_model = ema.ema if ema is not None else model

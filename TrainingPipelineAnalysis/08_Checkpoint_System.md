@@ -6,7 +6,7 @@ Trong quá trình huấn luyện các mô hình Học sâu kéo dài nhiều gi�
 
 Một hệ thống checkpoint thiếu sót (ví dụ: chỉ lưu trọng số mô hình mà quên lưu trạng thái của Optimizer hay GradScaler) sẽ khiến quá trình huấn luyện nối tiếp (**Resume Training**) bị mất ổn định nghiêm trọng: Optimizer bị reset động lượng về 0, tốc độ học bị nhảy cóc, và mô hình gặp hiện tượng đứt gãy đường cong hội tụ (Loss Spike).
 
-Chương này phân tích kiến trúc quản lý checkpoint được cài đặt trong tệp [`src/utils/checkpoint.py`](file:///home/tranmanhduy/Workspace/ptithcm/TTTN/CNNModel/src/utils/checkpoint.py), cơ chế lưu trữ **7 Thành phần Trạng thái**, kỹ thuật trích xuất phần thân **Trunk State-Dict (`best_trunk.pt`)** phục vụ cho Học chuyển giao (Transfer Learning), và quy trình tiếp tục huấn luyện (Resume Training) hoàn hảo.
+Chương này phân tích kiến trúc quản lý checkpoint được cài đặt trong tệp [`src/utils/checkpoint.py`](file:///home/tranmanhduy/Workspace/ptithcm/TTTN/CNNModel/src/utils/checkpoint.py), cơ chế lưu trữ **8 Thành phần Trạng thái**, kỹ thuật trích xuất phần thân **Trunk State-Dict (`best_trunk.pt`)** phục vụ cho Học chuyển giao (Transfer Learning), và quy trình tiếp tục huấn luyện (Resume Training) hoàn hảo.
 
 ---
 
@@ -14,7 +14,7 @@ Chương này phân tích kiến trúc quản lý checkpoint được cài đặ
 
 ### 2.1. Cấu Trúc Đóng Gói Checkpoint (Full State Dictionary Structure)
 
-Tệp [`src/utils/checkpoint.py`](file:///home/tranmanhduy/Workspace/ptithcm/TTTN/CNNModel/src/utils/checkpoint.py#L5-L26) định nghĩa hàm `save_checkpoint`:
+Tệp [`src/utils/checkpoint.py`](file:///home/tranmanhduy/Workspace/ptithcm/TTTN/CNNModel/src/utils/checkpoint.py#L5-L28) định nghĩa hàm `save_checkpoint`:
 
 ```python
 def save_checkpoint(
@@ -24,11 +24,13 @@ def save_checkpoint(
     scheduler,
     ema,
     epoch: int,
+    global_step: int,
     best_val: float,
     cfg,
 ) -> None:
     ckpt = {
         "epoch": epoch,
+        "global_step": global_step,
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
         "scheduler": scheduler.state_dict(),
@@ -44,25 +46,27 @@ def save_checkpoint(
 +------------------------------------------------------------------------------------+
 | Full State Checkpoint Dictionary Layout (.pt)                                     |
 +------------------------------------------------------------------------------------+
-| 1. "model"     : Dict[str, Tensor] -> State-dict trọng số hiện tại của NMSFreeDetector|
-| 2. "optimizer" : Dict              -> State-dict động lượng (m_t, v_t) của AdamW    |
-| 3. "scheduler" : Dict              -> State-dict số bước lặp của LambdaLR Scheduler |
-| 4. "ema"       : Dict[str, Tensor] -> State-dict trọng số trung bình mượt ModelEMA  |
-| 5. "epoch"     : int               -> Epoch chỉ số hiện tại (0..99)                |
-| 6. "best_val"  : float             -> Giá trị Loss Validation tốt nhất từ trước     |
-| 7. "cfg"       : Dict              -> Cấu hình siêu tham số toàn bộ TrainConfig     |
+| 1. "model"       : Dict[str, Tensor] -> State-dict trọng số hiện tại của NMSFreeDetector|
+| 2. "optimizer"   : Dict              -> State-dict động lượng (m_t, v_t) của AdamW    |
+| 3. "scheduler"   : Dict              -> State-dict số bước lặp của LambdaLR Scheduler |
+| 4. "ema"         : Dict[str, Tensor] -> State-dict trọng số trung bình mượt ModelEMA  |
+| 5. "epoch"       : int               -> Epoch chỉ số hiện tại (0..99)                |
+| 6. "global_step" : int               -> Step toàn cục hiện tại (global step count)   |
+| 7. "best_val"    : float             -> Giá trị Loss Validation tốt nhất từ trước     |
+| 8. "cfg"         : Dict              -> Cấu hình siêu tham số toàn bộ TrainConfig     |
 +------------------------------------------------------------------------------------+
 ```
 
-#### Phân tích Chi tiết 7 Thành phần:
+#### Phân tích Chi tiết 8 Thành phần:
 
 1. **`model` (`model.state_dict()`)**: Lưu trữ toàn bộ trọng số (Weights) và các tham số thống kê BatchNorm (`running_mean`, `running_var`) của mô hình huấn luyện chính.
 2. **`optimizer` (`optimizer.state_dict()`)**: **Cực kỳ quan trọng**. Đối với AdamW, thành phần này chứa hai vector động lượng $m_t$ (First Moment) và $v_t$ (Second Moment) của từng tham số trong mô hình. Nếu không nạp lại thành phần này khi Resume, AdamW sẽ coi như bắt đầu từ $t=0$, tính toán lại $m_t, v_t$ từ đầu, làm biến động mạnh các bước cập nhật trọng số tiếp theo.
 3. **`scheduler` (`scheduler.state_dict()`)**: Lưu trữ vị trí step hiện tại của bộ điều phối tốc độ học. Đảm bảo khi resume, LR tiếp tục suy giảm theo đúng đường cong Cosine Decay mà không bị nhảy về $\text{lr}_0$.
 4. **`ema` (`ema.state_dict()`)**: Lưu trữ trọng số mượt của mô hình bóng `ModelEMA`. Giúp giữ nguyên chất lượng đánh giá validation mô hình EMA sau khi resume.
 5. **`epoch`**: Ghi nhận chỉ số epoch vừa hoàn thành.
-6. **`best_val`**: Kỷ lục loss validation tốt nhất đạt được, dùng làm mốc so sánh cho các epoch tiếp theo.
-7. **`cfg`**: Ghi lại toàn bộ từ điển cấu hình `TrainConfig`, đảm bảo tính minh bạch tuyệt đối về siêu tham số đã dùng để tạo ra checkpoint đó.
+6. **`global_step`**: Ghi nhận số step huấn luyện toàn cục đã thực hiện, giúp chính xác hóa việc theo dõi log và resume nhip độ step.
+7. **`best_val`**: Kỷ lục loss validation tốt nhất đạt được, dùng làm mốc so sánh cho các epoch tiếp theo.
+8. **`cfg`**: Ghi lại toàn bộ từ điển cấu hình `TrainConfig`, đảm bảo tính minh bạch tuyệt đối về siêu tham số đã dùng để tạo ra checkpoint đó.
 
 ---
 
@@ -153,8 +157,8 @@ start_epoch += 1  # Tiếp tục từ epoch tiếp theo
 
 | Tệp Checkpoint | Dung Lượng Tương Đối | Thành Phần Lưu Trữ | Mục Đích Sử Dụng |
 | :--- | :--- | :--- | :--- |
-| **`best.pt`** | Lớn (~140 - 280 MB) | Full 7 thành phần (Model+Opt+Sched+EMA+Meta) | Khôi phục huấn luyện tốt nhất / Evaluate |
-| **`last.pt`** | Lớn (~140 - 280 MB) | Full 7 thành phần (Trạng thái Epoch cuối) | Resume huấn luyện khi sự cố ngắt đứt |
+| **`best.pt`** | Lớn (~140 - 280 MB) | Full 8 thành phần (Model+Opt+Sched+EMA+GlobalStep+Epoch+BestVal+Cfg) | Khôi phục huấn luyện tốt nhất / Evaluate |
+| **`last.pt`** | Lớn (~140 - 280 MB) | Full 8 thành phần (Trạng thái step/epoch cuối) | Resume huấn luyện khi sự cố ngắt đứt |
 | **`best_trunk.pt`** | Nhỏ (~40 - 90 MB) | Backbone + Neck + Meta config | Transfer Learning / Thay Head sang dataset mới |
 | **Model Only Pt** | Nhỏ (~45 - 90 MB) | Chỉ `model.state_dict()` | Deploy suy luận (Inference / Export ONNX) |
 
@@ -162,4 +166,4 @@ start_epoch += 1  # Tiếp tục từ epoch tiếp theo
 
 ## 4. KẾT LUẬN CHƯƠNG
 
-Hệ thống quản lý Checkpoint trong dự án thể hiện sự hoàn thiện kỹ thuật cao và tư duy thiết kế phần mềm học sâu chuyên nghiệp. Bằng cách thực thi cơ chế **Đóng gói Trạng thái 7 Thành phần (Full State Persistence)**, phân tách minh bạch giữa tệp khôi phục huấn luyện (`best.pt`, `last.pt`) và tệp học chuyển giao (`best_trunk.pt`), hệ thống vừa đảm bảo tính an toàn tuyệt đối cho quá trình huấn luyện dài ngày, vừa mang lại sự linh hoạt tối đa cho việc tái sử dụng trọng số mô hình trong các bài toán thực tế về sau.
+Hệ thống quản lý Checkpoint trong dự án thể hiện sự hoàn thiện kỹ thuật cao và tư duy thiết kế phần mềm học sâu chuyên nghiệp. Bằng cách thực thi cơ chế **Đóng gói Trạng thái 8 Thành phần (Full State Persistence)**, phân tách minh bạch giữa tệp khôi phục huấn luyện (`best.pt`, `last.pt`) và tệp học chuyển giao (`best_trunk.pt`), hệ thống vừa đảm bảo tính an toàn tuyệt đối cho quá trình huấn luyện dài ngày, vừa mang lại sự linh hoạt tối đa cho việc tái sử dụng trọng số mô hình trong các bài toán thực tế về sau.

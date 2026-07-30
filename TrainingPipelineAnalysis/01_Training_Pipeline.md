@@ -134,12 +134,12 @@ Sơ đồ tổng quan toàn bộ vòng đời huấn luyện 15 bước được
   $$W_{\text{EMA}} \leftarrow W_{\text{EMA}} \cdot d(t) + W_{\text{model}} \cdot (1 - d(t))$$
 
 #### Bước 14: Đánh giá Định kỳ (Validation Loop)
-- **Cài đặt**: [`validate`](file:///home/tranmanhduy/Workspace/ptithcm/TTTN/CNNModel/src/train/engine.py#L239-L257).
-- **Cơ chế**: Định kỳ mỗi `val_interval` epoch (mặc định 1 epoch), chuyển mô hình EMA (`ema.ema`) sang chế độ `model.eval()`, ngắt tính toán gradient (`@torch.no_grad()`), và tính toán `val_loss` trên toàn bộ tập Validation.
+- **Cài đặt**: [`validate`](file:///home/tranmanhduy/Workspace/ptithcm/TTTN/CNNModel/src/train/engine.py#L241-L280).
+- **Cơ chế**: Định kỳ theo số bước lặp `val_interval_steps` (cấu hình trong `TrainConfig`, ví dụ 5000 steps) và ở cuối quá trình huấn luyện, chuyển mô hình EMA (`ema.ema` nếu có, hoặc `model`) sang chế độ `model.eval()`, ngắt tính toán gradient (`@torch.no_grad()`), và tính toán `val_loss` trên toàn bộ tập Validation.
 
 #### Bước 15: Lưu trữ Trạng thái Checkpoint (Checkpoint Persistence)
 - **Cài đặt**: [`save_checkpoint`](file:///home/tranmanhduy/Workspace/ptithcm/TTTN/CNNModel/src/utils/checkpoint.py#L5-L26).
-- **Cơ chế**: Nếu `val_loss` đạt kỷ lục mới (`is_best`), tiến hành lưu file `best.pt` chứa toàn bộ 7 thành phần trạng thái (model, optimizer, scheduler, ema, epoch, best_val, cfg), đồng thời xuất file `best_trunk.pt` chứa riêng trọng số Backbone + Neck + Head meta cho các bài toán Transfer Learning về sau.
+- **Cơ chế**: Nếu `val_loss` đạt kỷ lục mới (`is_best`), tiến hành lưu file `best.pt` chứa toàn bộ 8 thành phần trạng thái (`model`, `optimizer`, `scheduler`, `ema`, `epoch`, `global_step`, `best_val`, `cfg`), đồng thời xuất file `best_trunk.pt` chứa riêng trọng số Backbone + Neck + Head meta cho các bài toán Transfer Learning về sau.
 
 ---
 

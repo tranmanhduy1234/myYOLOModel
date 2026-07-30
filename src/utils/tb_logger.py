@@ -1,41 +1,3 @@
-"""
-tb_logger.py
-============
-TensorBoard logging cho NMSFreeDetector - GOM VE 1 CHO (thay cho ban cu bi
-trung lap giua tb_logger.py va training_logger.py).
-
-Noi dung:
-    - TrainingLogger : lop chinh, goi 1 lan/step, tu quan ly nhip do ghi log
-      (log_interval cho scalar, histogram_interval cho histogram/BN vi cac
-      thao tac nay ton chi phi hon).
-    - TimeTracker, ActivationTracker : tien ich phu, tach rieng vi chung giu
-      state rieng khong thuoc nhip do log_interval/histogram_interval chung.
-    - LossSmoother, log_lr_schedule, log_activation_histograms : tien ich nho,
-      dung khi can (khong bat buoc trong vong lap chinh).
-
-Vi du su dung (xem them docs/TENSORBOARD_GUIDE.md):
-
-    writer = SummaryWriter(log_dir="runs/experiment_name")
-    logger = TrainingLogger(writer, log_interval=10, histogram_interval=100)
-
-    for step, (images, targets) in enumerate(loader):
-        prev_params = TrainingLogger.snapshot_params(model)   # truoc backward
-
-        preds = model(images)
-        loss, items = criterion(preds, targets)
-        loss.backward()
-
-        logger.log_gradients(model, global_step)               # TRUOC optimizer.step()
-        optimizer.step()
-        logger.log_weights(model, global_step)                 # SAU optimizer.step()
-        logger.log_weight_updates(model, prev_params, global_step)
-
-        logger.log_learning_rate(optimizer, global_step, epoch)
-        logger.log_losses(items, global_step, phase="train")
-        logger.log_ema(ema, global_step)
-        logger.log_gpu_memory(global_step)
-"""
-
 import logging
 import math
 from typing import Dict, Optional
@@ -43,12 +5,6 @@ from typing import Dict, Optional
 import torch
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
-
-# Dung chung logger "train" voi logging_setup.py de canh bao NaN/Inf gradient
-# hoac weight nam chung 1 file .log voi phan con lai cua qua trinh training.
-# Neu setup_logging() chua duoc goi thi logger nay chua co handler - cac dong
-# warning() se khong bien mat, chi la khong duoc ghi ra dau ca (Python logging
-# van chay binh thuong, khong loi).
 _log = logging.getLogger("train")
 
 

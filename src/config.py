@@ -10,7 +10,7 @@ class TrainConfig:
 
     # 1) labels_root: chứa 2 thư mục con train/ và val/, mỗi thư mục có đủ bộ
     #    4 file jsonl (annotations/categories/images_info/file-map-path).
-    labels_root: str = "/home/tranmanhduy/Workspace/ptithcm/TTTN/CNNModel/DataPretrain1/Object365/labels"
+    labels_root: str = "/run/media/tranmanhduy/Data/Microsoft COCO.v2-raw.coco/labels"
     train_subdir: str = "train"
     val_subdir: str = "val"
     images_info_filename: str = "images_info.jsonl"
@@ -23,11 +23,11 @@ class TrainConfig:
     #    (mỗi thư mục con lại chứa patch0/, patch1/, ...). Đường dẫn ảnh thật
     #    = images_root_dir / <images_train_subdir hoặc images_val_subdir> / path
     #    (path lấy từ file map ở trên).
-    images_root_dir: str = "/home/tranmanhduy/Workspace/ptithcm/TTTN/CNNModel/DataPretrain1/Object365/images"
+    images_root_dir: str = "/run/media/tranmanhduy/Data/Microsoft COCO.v2-raw.coco/images"
     images_train_subdir: str = "train"
     images_val_subdir: str = "val"
-
-    index_cache_dir: str = "/home/tranmanhduy/Workspace/ptithcm/TTTN/CNNModel/DataPretrain1/Object365/images/cache"     # nơi lưu byte-offset index (pickle cache)
+    
+    index_cache_dir: str = "/run/media/tranmanhduy/Data/Microsoft COCO.v2-raw.coco/images/cache"     # nơi lưu byte-offset index (pickle cache)
     rebuild_index: bool = False          # ép build lại index dù đã có cache
 
     skip_iscrowd: bool = True            # bỏ annotation iscrowd=1 khi train
@@ -35,14 +35,14 @@ class TrainConfig:
     include_images_without_annotations: bool = False  # có lấy ảnh "rỗng" (sau lọc top-80) làm sample hay không
 
     img_size: int = 480
-    batch_size: int = 16
+    batch_size: int = 4
     num_workers: int = 4
     pin_memory: bool = True
     shuffle: bool = True
     drop_last: bool = False
     persistent_workers: bool = True
     prefetch_factor: int = 4
-    seed: int = 28
+    seed: int = 42
 
     # ---- Data Augment ----
     horizontalFlip: float = 0.5

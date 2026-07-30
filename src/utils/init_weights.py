@@ -15,7 +15,6 @@ Cách dùng:
     model = NMSFreeDetector()
     initialize_weights(model)
 """
-
 import torch.nn as nn
 from src.blocks import DFL
 

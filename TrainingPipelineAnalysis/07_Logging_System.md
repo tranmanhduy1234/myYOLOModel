@@ -43,10 +43,10 @@ Hệ thống logging được thiết kế theo 2 tầng độc lập nhưng ph�
 - **Cấu hình Singleton Logger**: Sử dụng tên logger chung `"train"`. Hàm `_ensure_text_logging` trong `engine.py` đảm bảo chỉ có 1 handler duy nhất được gắn vào logger, tránh việc mở 2 tệp log trùng lặp khi chạy.
 - **Định dạng Log (Log Formatter)**:
   `[YYYY-MM-DD HH:MM:SS][LEVEL][train] Message`
-- **Tần suất**: Ghi thông tin chi tiết mỗi `log_interval` step (mặc định 20 step):
+- **Tần suất**: Ghi thông tin loss ngắn gọn mỗi `log_loss_interval` step (mặc định 50 steps) và ghi log phân tích chi tiết breakdowns (o2m/o2o, lr, ema, gpu memory, speed) mỗi `log_interval` step (mặc định 500 steps):
 
 ```text
-[2026-07-24 11:38:31][INFO][train] [epoch 0] step 20/2125 loss=4.1234 (o2m iou=0.345 cls=1.234 dfl=0.567 npos=120) (o2o iou=0.312 cls=1.102 dfl=0.512 npos=12) lr=0.000007 t=12.4s
+[2026-07-28 11:38:31][INFO][train] [epoch 0] step 500/2125 (global 500) o2m(iou=0.345 cls=1.234 dfl=0.567 npos=120) o2o(iou=0.312 cls=1.102 dfl=0.512 npos=12) lr=0.000850 ema_decay=0.99942 gpu_mem=2.45GB t=45.2s
 ```
 
 - **Thông tin theo dõi**: Trích xuất chi tiết từng thành phần iou/cls/dfl và số lượng positive anchor (`npos`) cho **cả hai nhánh o2m và o2o**, giúp kỹ sư theo dõi sự lệch pha giữa hai nhánh ngay lập tức trên file log.
@@ -57,9 +57,9 @@ Hệ thống logging được thiết kế theo 2 tầng độc lập nhưng ph�
 
 Được cài đặt trong lớp [`TrainingLogger`](file:///home/tranmanhduy/Workspace/ptithcm/TTTN/CNNModel/src/utils/tb_logger.py#L55-L328).
 
-Lớp `TrainingLogger` đóng vai trò là bộ quản lý tập trung toàn bộ dữ liệu TensorBoard, tự động phân bổ và kiểm soát tần suất ghi dữ liệu dựa trên hai ngưỡng:
-- `log_interval = 20`: Tần suất ghi cho các đại lượng Scalar nhẹ (Loss, LR, Memory).
-- `histogram_interval = 100`: Tần suất ghi cho các đại lượng Histogram và Matrix nặng (Gradients, Weights, Update Ratios, BN Statistics).
+Lớp `TrainingLogger` đóng vai trò là bộ quản lý tập trung toàn bộ dữ liệu TensorBoard, tự động phân bổ và kiểm soát tần suất ghi dữ liệu dựa trên hai ngưỡng linh hoạt cấu hình từ `TrainConfig`:
+- `log_interval`: Tần suất ghi cho các đại lượng Scalar nhẹ (Loss, LR, Memory, RMSNorm Gradient/Weight, Update Ratio - mặc định cấu hình theo `cfg.log_interval`, ví dụ 500 step).
+- `log_hist_interval`: Tần suất ghi cho các đại lượng Histogram và Matrix nặng (Gradients Histogram, Weights Histogram, BN Statistics - mặc định cấu hình theo `cfg.log_hist_interval`, ví dụ 500 step). Hệ thống hỗ trợ đặt `log_hist_interval <= 0` để **tắt hoàn toàn việc ghi Histogram**, giúp tối ưu hóa tốc độ huấn luyện tối đa và tiết kiệm dung lượng đĩa đệm.
 
 ---
 
@@ -93,19 +93,23 @@ $$\text{RMS}(g_\theta) = \frac{\|g_\theta\|_2}{\sqrt{N_\theta}}$$
 
 với $N_\theta$ là số lượng phần tử trong tham số $\theta$.
 
-#### Ý nghĩa Kỹ thuật:
+#### Ý nghĩa Kỹ thuật & Tối ưu Tần suất:
 - **Thời điểm ghi**: Việc ghi log gradient SAU khi `unscale_` giúp trích xuất đúng giá trị thật của gradient (không bị nhân với hệ số $2^{16}$ của AMP). Việc ghi TRƯỚC khi `clip_grad_norm_` cho phép kỹ sư thấy được độ lớn thực sự của gradient trước khi nó bị gọt giũa, từ đó phát hiện sớm hiện tượng gradient bị phình to (Gradient Explosion).
 - **Xử lý An toàn (Histogram Crash Prevention)**: PyTorch `add_histogram` sẽ gây ra lỗi `ValueError: histogram is empty` và crash chương trình nếu tensor chứa NaN/Inf. Hàm `log_gradients` trong `tb_logger.py` kiểm tra cờ `torch.isfinite(param.grad).all()`. Nếu phát hiện NaN/Inf, hệ thống chủ động bỏ qua histogram của param đó, phát cảnh báo ra log và tiếp tục huấn luyện thay vì ngắt chương trình.
+- **Kiểm soát Tần suất Histogram**: Việc ghi Histogram được bảo vệ bằng điều kiện `self.histogram_interval > 0 and step % self.histogram_interval == 0`, đảm bảo chỉ tiêu tốn tài nguyên ghi đĩa ở đúng nhịp độ cấu hình.
 
 ---
 
 ### 3.3. Theo Dõi Trọng Số và Tỷ Lệ Cập Nhật (`log_weights` & `log_weight_updates`)
 
-#### 1. Snapshot Tham Số:
-Trước khi bước vào `optimizer.zero_grad()`, hàm tĩnh [`snapshot_params`](file:///home/tranmanhduy/Workspace/ptithcm/TTTN/CNNModel/src/utils/tb_logger.py#L75-L78) chụp lại toàn bộ giá trị trọng số của mô hình theo TÊN (`name`):
+#### 1. Snapshot Tham Số Lười (Lazy Parameter Snapshot Optimization):
+Trong `src/train/engine.py`, việc chụp lại trọng số mô hình trước khi bước vào `optimizer.zero_grad()` được tối ưu hóa lười (lazy execution):
 ```python
-prev_params = TrainingLogger.snapshot_params(model)  # Chụp W_t
+# Chỉ chụp tham số TRƯỚC khi update đúng ở các step sẽ thực sự ghi log update_ratio
+do_snapshot = do_weight_log and tb_logger is not None and getattr(tb_logger, "log_interval", 0) > 0 and (global_step % tb_logger.log_interval == 0)
+prev_params = TrainingLogger.snapshot_params(model) if do_snapshot else None
 ```
+*Tác dụng*: Việc chỉ chụp `prev_params` đúng vào các step cần log (thay vì clone ở mọi step) giúp loại bỏ 100% chi phí copy/clone tensor trên VRAM ở các step còn lại, giúp tốc độ huấn luyện được cải thiện đáng kể.
 
 #### 2. Tính toán Update Ratio (Tỷ lệ Cập nhật Trọng số):
 Sau khi gọi `optimizer.step()`, hàm `log_weight_updates` tính toán tỷ lệ cập nhật tương đối cho từng layer:
@@ -143,13 +147,13 @@ Chỉ số này giúp kỹ sư phát hiện lập tức các sự cố rò rỉ 
 | Loại Chỉ Số Log | Mục TensorBoard | Tần Suất Ghi | Chi Phí Tính Toán | Mục Đích Giám Sát |
 | :--- | :--- | :--- | :--- | :--- |
 | **Loss Total & Parts** | `train/loss_*`, `val/loss_*` | Every Step ($1$) | Rất thấp (Scalar) | Động học hội tụ hàm loss |
-| **Learning Rate** | `Learning_Rate/group_*` | `log_interval` ($20$) | Rất thấp (Scalar) | Kiểm tra Cosine Warmup decay |
-| **GPU Memory** | `System/GPU_*` | `log_interval` ($20$) | Rất thấp (CUDA call) | Đánh giá VRAM & Memory Leaks |
-| **Gradient RMSNorm** | `Gradients_RMS/*` | `log_interval` ($20$) | Thấp (Norm calculation) | Kiểm soát độ lớn gradient |
-| **Gradient Histograms** | `Gradients/*` | `hist_interval` ($100$)| Trung bình | Quan sát phân phối gradient |
-| **Weight Stats & RMS** | `Weights_Stats/*` | `log_interval` ($20$) | Thấp | Kiểm tra phương sai trọng số |
-| **Update Ratio** | `Update_Ratio/*` | `log_interval` ($20$) | Trung bình (Difference) | Đánh giá tốc độ cập nhật trọng số |
-| **BN Statistics** | `BN/*/running_mean` | `hist_interval` ($100$)| Trung bình (Module Scan)| Kiểm tra sự ổn định BatchNorm |
+| **Learning Rate** | `Learning_Rate/group_*` | `log_interval` (e.g. $500$) | Rất thấp (Scalar) | Kiểm tra Cosine Warmup decay |
+| **GPU Memory** | `System/GPU_*` | `log_interval` (e.g. $500$) | Rất thấp (CUDA call) | Đánh giá VRAM & Memory Leaks |
+| **Gradient RMSNorm** | `Gradients_RMS/*` | `log_interval` (e.g. $500$) | Thấp (Norm calculation) | Kiểm soát độ lớn gradient |
+| **Gradient Histograms** | `Gradients/*` | `log_hist_interval` (e.g. $500$, off $\le 0$) | Trung bình | Quan sát phân phối gradient |
+| **Weight Stats & RMS** | `Weights_Stats/*` | `log_interval` (e.g. $500$) | Thấp | Kiểm tra phương sai trọng số |
+| **Update Ratio** | `Update_Ratio/*` | `log_interval` (e.g. $500$, Lazy Snapshot) | Trung bình (Difference) | Đánh giá tốc độ cập nhật trọng số |
+| **BN Statistics** | `BN/*/running_mean` | `log_hist_interval` (e.g. $500$, off $\le 0$) | Trung bình (Module Scan)| Kiểm tra sự ổn định BatchNorm |
 
 ---
 

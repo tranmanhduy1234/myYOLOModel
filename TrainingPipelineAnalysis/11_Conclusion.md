@@ -33,8 +33,8 @@ Các khám phá và phân tích kỹ thuật trọng tâm của bộ tài liệu
 7. **Hệ Thống Giám Sát Multi-Tier & Profiling**:
    Phân tầng hiệu quả giữa **Text Log File** kiểm toán chi tiết và **TensorBoard Dynamic Logger** trực quan. Kiểm soát thông minh tần suất ghi nhật ký Scalar (20 steps) và Histogram/BN stats (100 steps), giúp kỹ sư giám sát tức thì RMSNorm Gradient, Update-to-Weight Ratio, và GPU VRAM Profiling.
 
-8. **Cơ Chế Checkpoint 7 Thành Phần & Trunk Extraction**:
-   Đóng gói toàn bộ trạng thái hệ thống (`model`, `optimizer`, `scheduler`, `ema`, `epoch`, `best_val`, `cfg`) đảm bảo tính khả thi tuyệt đối cho việc Resume Training. Xuất tệp gọn nhẹ `best_trunk.pt` sẵn sàng phục vụ cho các bài toán Học chuyển giao (Transfer Learning).
+8. **Cơ Chế Checkpoint 8 Thành Phần & Trunk Extraction**:
+   Đóng gói toàn bộ trạng thái hệ thống (`model`, `optimizer`, `scheduler`, `ema`, `epoch`, `global_step`, `best_val`, `cfg`) đảm bảo tính khả thi tuyệt đối cho việc Resume Training. Xuất tệp gọn nhẹ `best_trunk.pt` sẵn sàng phục vụ cho các bài toán Học chuyển giao (Transfer Learning).
 
 ---
 
