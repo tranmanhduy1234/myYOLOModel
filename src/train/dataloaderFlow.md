@@ -119,7 +119,7 @@ graph TD
         Batch_Output -.- N_Tensor
     end
 =====================================================================================================================
-__get_item__()
+# __get_item__() function
 flowchart TD
     A["1. Đọc thông tin file & lấy đường dẫn<br/><b>Input:</b> index (chỉ số mẫu)"] --> B["2. Đọc ảnh bằng OpenCV (cv2.imread)<br/>• <b>Image Shape:</b> (H_orig, W_orig, 3)<br/>• <b>Thứ tự chiều:</b> HWC<br/>• <b>Hệ màu:</b> BGR<br/>• <b>Kiểu dữ liệu:</b> uint8 [0 - 255]"]
     

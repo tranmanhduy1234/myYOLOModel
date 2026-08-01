@@ -4,6 +4,7 @@ from src.backbone_neck import Backbone, PAFPN
 from src.head import DetectHead
 from src.config import TrainConfig
 from src.utils.init_weights import initialize_weights
+import json
 
 class NMSFreeDetector(nn.Module):
     def __init__(self, nc=TrainConfig().nc, reg_max=TrainConfig().reg_max,
@@ -12,7 +13,7 @@ class NMSFreeDetector(nn.Module):
                  neck_n=TrainConfig().neck_n,
                  strides=TrainConfig().strides):
         super().__init__()
-        
+
         # Setting parameters
         self.nc = nc
         self.reg_max = reg_max
@@ -132,7 +133,20 @@ class NMSFreeDetector(nn.Module):
         for p in self.neck.parameters(): 
             p.requires_grad_(not freeze) 
         return self
+    
+    @classmethod
+    def from_config(cls, config_path):
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)["model"]
 
+        return cls(
+            nc=cfg["num_classes"],
+            reg_max=cfg["reg_max"],
+            backbone_w=tuple(cfg["backbone_w"]),
+            backbone_n=tuple(cfg["backbone_n"]),
+            neck_n=cfg["neck_n"],
+            strides=tuple(cfg["strides"]),
+        )
 if __name__ == "__main__":
     m = NMSFreeDetector().to("cuda").eval()
 

@@ -841,14 +841,14 @@ class DetectionLoss(nn.Module):
         Tinh tong loss cua model tren ca hai nhanh o2m va o2o.
 
         Dau vao:
-            preds : dict tra ve tu DetectHead o che do train:
-                {                     (bs, A, nc)      (bs, A, 4) [PIXEL] xyxy   (bs, 4*reg_max, A) [GRID] logit
+            model output: dict tra ve tu DetectHead o che do train:
+                {               (bs, A, nc)      (bs, A, 4) [PIXEL] xyxy   (bs, 4*reg_max, A) [GRID] logit
                     "o2m": {"cls": o2m_cls, "box": o2m_box, "reg_raw": o2m_reg},
                     "o2o": {"cls": o2o_cls, "box": o2o_box, "reg_raw": o2o_reg},
                     "anchors": anchors,   # (A, 2), [GRID], offset 0.5, CHUA nhan stride
                     "strides": stride_t,  # (A, 1), he so quy doi GRID -> PIXEL
                 }
-            targets : list[dict] do dai = batch_size:
+            dataloader output : list[dict] do dai = batch_size:
                 {"boxes": (N,4), [PIXEL], xyxy, "labels": (N,)}
 
         Tra ve:

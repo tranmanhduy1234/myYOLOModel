@@ -1,0 +1,13 @@
+{
+    "format_version": 1,
+
+    "model": {
+        "type": "NMSFreeDetector",
+        "backbone_w": [56, 112, 224, 448, 640],
+        "backbone_n": [3, 6, 6, 3],
+        "neck_n": 3,
+        "reg_max": 16,
+        "num_classes": 80,
+        "strides": [8, 16, 32]
+    }
+}

@@ -365,7 +365,7 @@ def collate_fn(batch):
     targets = list(targets)
     return images, targets
 
-def _build_split_dataset(cfg: TrainConfig, split_dir, is_train, image_path_map_filename, images_split_dir, cat_id_to_idx):
+def build_split_dataset(cfg: TrainConfig, split_dir, is_train, image_path_map_filename, images_split_dir, cat_id_to_idx):
     images_info_path = os.path.join(split_dir, cfg.images_info_filename)
     annotations_path = os.path.join(split_dir, cfg.annotations_filename)
     image_path_map_path = os.path.join(split_dir, image_path_map_filename)
@@ -432,7 +432,7 @@ def build_dataloaders(cfg: TrainConfig):
         os.path.join(train_dir, cfg.categories_filename)
     )
     
-    train_dataset = _build_split_dataset(
+    train_dataset = build_split_dataset(
         cfg, train_dir, is_train=True,
         image_path_map_filename=cfg.train_image_path_map_filename,
         images_split_dir=cfg.images_train_subdir, cat_id_to_idx=cat_id_to_idx
@@ -441,7 +441,7 @@ def build_dataloaders(cfg: TrainConfig):
     val_dataset = None
     val_images_info = os.path.join(val_dir, cfg.images_info_filename)
     if os.path.isfile(val_images_info):
-        val_dataset = _build_split_dataset(
+        val_dataset = build_split_dataset(
             cfg, val_dir, is_train=False,
             image_path_map_filename=cfg.val_image_path_map_filename,
             images_split_dir=cfg.images_val_subdir, cat_id_to_idx=cat_id_to_idx
@@ -473,16 +473,16 @@ def build_dataloaders(cfg: TrainConfig):
 
 if __name__ == "__main__":
     cfg = TrainConfig()
-    cfg.labels_root = "/run/media/tranmanhduy/Data/Microsoft COCO.v2-raw.coco/labels"
-    cfg.images_root_dir = "/run/media/tranmanhduy/Data/Microsoft COCO.v2-raw.coco/images"
-    cfg.index_cache_dir = "/run/media/tranmanhduy/Data/Microsoft COCO.v2-raw.coco/images/cache"
+    cfg.labels_root = "/run/media/tranmanhduy/Data/MSCOCO/labels"
+    cfg.images_root_dir = "/run/media/tranmanhduy/Data/MSCOCO/images"
+    cfg.index_cache_dir = "/run/media/tranmanhduy/Data/MSCOCO/images/cache"
     
     train_loader, val_loader, classes, num_classes = build_dataloaders(cfg)
 
     import matplotlib.pyplot as plt
     import matplotlib.patches as patches
 
-    for batch_idx, (images, targets) in enumerate(train_loader):
+    for batch_idx, (images, targets) in enumerate(val_loader):
         num_show = min(4, len(images))
         """
             targets : list[dict] do dai = batch_size:

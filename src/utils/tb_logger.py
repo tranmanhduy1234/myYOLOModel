@@ -46,7 +46,7 @@ class TrainingLogger:
     def log_losses(self, items: dict, step: int, phase: str = "train") -> None:
         """4 bieu do gop nhieu duong/1 chart - de so sanh truc quan. Ghi moi step
         (re, khong gate theo log_interval)."""
-        assert phase in ("train", "val"), f"phase phai la 'train' hoac 'val', duoc '{phase}'"
+        assert phase in ("train", "val", "finetune_train", "finetune_val"), f"phase phai la 'train', 'val', 'finetune_train' hoac 'finetune_val', duoc '{phase}'"
 
         self.writer.add_scalars(f"{phase}/loss_total", {
             "total": items["loss"],
@@ -87,7 +87,9 @@ class TrainingLogger:
             "cls": items["o2m/cls"] / o2m_total,
             "dfl": items["o2m/dfl"] / o2m_total,
         }, step)
-
+    def log_scalars(self, scalars: dict, step: int) -> None:
+        for k, v in scalars.items():
+            self.writer.add_scalar(k, v, step)
     # ==========================================================================
     # 2. GRADIENT
     # ==========================================================================

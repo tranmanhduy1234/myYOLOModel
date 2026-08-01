@@ -10,5 +10,4 @@
 - download gdown: pip install -U gdown
     + dowload file on gg drive: gdown <URL hoặc FILE_ID>
 - create moi truong conda: conda create -n name_env python=3.10
-- huggingface-key: 
 - giai nen tar: tar -xvf file.tar.xz -C /workspace

@@ -10,7 +10,7 @@ class TrainConfig:
 
     # 1) labels_root: chứa 2 thư mục con train/ và val/, mỗi thư mục có đủ bộ
     #    4 file jsonl (annotations/categories/images_info/file-map-path).
-    labels_root: str = "/run/media/tranmanhduy/Data/Microsoft COCO.v2-raw.coco/labels"
+    labels_root: str = "/home/tranmanhduy/Workspace/ptithcm/TTTN/CNNModel/DataPretrain1/Object365/labels"
     train_subdir: str = "train"
     val_subdir: str = "val"
     images_info_filename: str = "images_info.jsonl"
@@ -23,11 +23,11 @@ class TrainConfig:
     #    (mỗi thư mục con lại chứa patch0/, patch1/, ...). Đường dẫn ảnh thật
     #    = images_root_dir / <images_train_subdir hoặc images_val_subdir> / path
     #    (path lấy từ file map ở trên).
-    images_root_dir: str = "/run/media/tranmanhduy/Data/Microsoft COCO.v2-raw.coco/images"
+    images_root_dir: str = "/home/tranmanhduy/Workspace/ptithcm/TTTN/CNNModel/DataPretrain1/Object365/images"
     images_train_subdir: str = "train"
-    images_val_subdir: str = "val"
+    images_val_subdir: str = "valid"
     
-    index_cache_dir: str = "/run/media/tranmanhduy/Data/Microsoft COCO.v2-raw.coco/images/cache"     # nơi lưu byte-offset index (pickle cache)
+    index_cache_dir: str = "/home/tranmanhduy/Workspace/ptithcm/TTTN/CNNModel/DataPretrain1/Object365/images/cache"     # nơi lưu byte-offset index (pickle cache)
     rebuild_index: bool = False          # ép build lại index dù đã có cache
 
     skip_iscrowd: bool = True            # bỏ annotation iscrowd=1 khi train
@@ -72,7 +72,7 @@ class TrainConfig:
     momentum: float = 0.937       # dùng khi optimizer="sgd"
 
     # ---- Loss weights (truyền thẳng xuống DetectionLoss) ----
-    cls_gain: float = 1.0
+    cls_gain: float = 0.5
     box_gain: float = 7.5
     dfl_gain: float = 1.5
     w_o2o: float = 1.0
