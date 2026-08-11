@@ -33,16 +33,32 @@ def build_finetune_model(cfg: FinetuneConfig) -> NMSFreeDetector:
             logger.info("Loaded backbone + neck from trunk checkpoint.")
         elif "model" in ckpt:
             state_dict = ckpt["model"]
-            # Chuẩn hóa key để tránh lỗi module prefix (DDP / DataParallel)
-            cleaned_state_dict = {
-                k.replace("module.", "").replace("model.", ""): v 
-                for k, v in state_dict.items()
+
+            # Chỉ bóc wrapper prefix ở đầu key, không replace bừa trong tên module.
+            def strip_prefix(key: str) -> str:
+                while key.startswith(("module.", "model.")):
+                    key = key.split(".", 1)[1]
+                return key
+
+            cleaned_state_dict = {strip_prefix(k): v for k, v in state_dict.items()}
+            filtered = {
+                k: v for k, v in cleaned_state_dict.items()
+                if k.startswith(("backbone.", "neck."))
             }
-            filtered = {k: v for k, v in cleaned_state_dict.items()
-                        if k.startswith("backbone.") or k.startswith("neck.")}
+
             missing, unexpected = model.load_state_dict(filtered, strict=False)
-            logger.info(f"Loaded backbone+neck from full checkpoint. "
-                        f"Missing keys (head expected): {len(missing)}, Unexpected: {len(unexpected)}")
+            missing_trunk = [
+                k for k in missing
+                if k.startswith(("backbone.", "neck."))
+            ]
+            if missing_trunk or unexpected:
+                raise RuntimeError(
+                    "Checkpoint trunk không khớp architecture. "
+                    f"Missing trunk keys: {missing_trunk[:10]} | "
+                    f"Unexpected keys: {unexpected[:10]}"
+                )
+
+            logger.info("Loaded backbone + neck từ full checkpoint.")
         else:
             raise ValueError(f"Checkpoint format không nhận diện được. Keys: {list(ckpt.keys())[:10]}")
     else:
@@ -120,10 +136,20 @@ def move_batch(images, targets, device):
     ]
     return images, targets
 
+def set_train_mode(model: NMSFreeDetector):
+    """Train mode nhưng giữ các block đã freeze ở eval để BN buffers không trôi."""
+    model.train()
+
+    if not any(p.requires_grad for p in model.backbone.parameters()):
+        model.backbone.eval()
+    if not any(p.requires_grad for p in model.neck.parameters()):
+        model.neck.eval()
+
+
 def train_one_epoch(model, criterion, loader, optimizer, scheduler,
                     scaler, ema, device, cfg: FinetuneConfig, epoch, global_step,
                     best_val, val_loader=None, tb_logger=None):
-    model.train()
+    set_train_mode(model)
     running_loss = 0.0
     n_batches = len(loader)
     use_amp = scaler is not None
@@ -154,19 +180,25 @@ def train_one_epoch(model, criterion, loader, optimizer, scheduler,
             loss.backward()
 
         total_norm = nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip_norm).item()
-        if not math.isfinite(total_norm):
-            logger.warning(f"[epoch {epoch + 1}] step {step} (global {global_step}): gradient NaN/Inf")
+        bad_grad = not math.isfinite(total_norm)
+        if bad_grad:
+            logger.warning(
+                f"[epoch {epoch + 1}] step {step} (global {global_step}): "
+                "gradient NaN/Inf -> skip optimizer step"
+            )
 
         if use_amp:
             scale_before = scaler.get_scale()
-            scaler.step(optimizer)
+            if not bad_grad:
+                scaler.step(optimizer)
             scaler.update()
-            skip_lr = scaler.get_scale() < scale_before
+            skip_step = bad_grad or scaler.get_scale() < scale_before
         else:
-            optimizer.step()
-            skip_lr = False
+            skip_step = bad_grad
+            if not skip_step:
+                optimizer.step()
 
-        if not skip_lr:
+        if not skip_step:
             scheduler.step()
             if ema is not None:
                 ema.update(model=model)
@@ -192,7 +224,7 @@ def train_one_epoch(model, criterion, loader, optimizer, scheduler,
             logger.info(msg)
 
         if cfg.log_interval > 0 and global_step % cfg.log_interval == 0:
-            mem = f" gpu={torch.cuda.memory_allocated() / 1024**3:.2f}GB" if torch.cuda.is_available() else ""
+            mem = f" gpu={torch.cuda.memory_allocated(device) / 1024**3:.2f}GB" if device.type == "cuda" else ""
             msg = (
                 f"[epoch {epoch + 1}] step {step}/{n_batches} (global {global_step}) "
                 f"o2m(iou={items['o2m/iou']:.3f} cls={items['o2m/cls']:.3f} dfl={items['o2m/dfl']:.3f}) "
@@ -222,7 +254,7 @@ def train_one_epoch(model, criterion, loader, optimizer, scheduler,
                     os.path.join(cfg.ckpt_dir, "best_trunk.pt")
                 )
                 logger.info(f"[step {global_step}] -> best checkpoint mới (val_loss={best_val:.4f})")
-            model.train()
+            set_train_mode(model)
 
         # Save checkpoint định kỳ
         if not cfg.save_best_only and cfg.save_ckpt_interval_steps > 0 and (global_step % cfg.save_ckpt_interval_steps == 0):
@@ -245,7 +277,7 @@ def validate(model, criterion, loader, device, cfg: FinetuneConfig, tb_logger=No
     model.eval()
     total = 0.0
     n = 0
-    last_items = None
+    item_sums = {}
     acc = MetricAccumulator(nc=cfg.nc)
 
     pbar_val = tqdm(loader, desc="Validating", ncols=100, leave=False)
@@ -257,16 +289,24 @@ def validate(model, criterion, loader, device, cfg: FinetuneConfig, tb_logger=No
         
         loss_val = items["loss"].item() if isinstance(items["loss"], torch.Tensor) else items["loss"]
         total += loss_val
-        last_items = items
         n += 1
+
+        for key, value in items.items():
+            if isinstance(value, torch.Tensor):
+                if value.numel() != 1:
+                    continue
+                value = value.detach().item()
+            if isinstance(value, (int, float)):
+                item_sums[key] = item_sums.get(key, 0.0) + float(value)
 
         acc.update(preds, targets)
 
     metrics = acc.compute()
 
     if tb_logger is not None:
-        if last_items is not None:
-            tb_logger.log_losses(last_items, step=step, phase="finetune_val")
+        if n > 0 and item_sums:
+            avg_items = {k: v / n for k, v in item_sums.items()}
+            tb_logger.log_losses(avg_items, step=step, phase="finetune_val")
         tb_logger.log_scalars({
             "map_50_95": metrics["map_50_95"],
             "map_50": metrics["map_50"],
@@ -283,17 +323,30 @@ def run_finetune(cfg: FinetuneConfig):
     set_seed(cfg.seed)
     os.makedirs(cfg.ckpt_dir, exist_ok=True)
 
-    device = cfg.device if torch.cuda.is_available() else "cpu"
-    if device != cfg.device:
-        logger.warning(f"'{cfg.device}' không khả dụng, fallback về '{device}'")
+    requested_device = torch.device(cfg.device)
+    if requested_device.type == "cuda":
+        if not torch.cuda.is_available():
+            device = torch.device("cpu")
+            logger.warning(f"'{cfg.device}' không khả dụng, fallback về 'cpu'")
+        elif requested_device.index is not None and requested_device.index >= torch.cuda.device_count():
+            raise ValueError(
+                f"CUDA device '{cfg.device}' không tồn tại. "
+                f"Máy chỉ có {torch.cuda.device_count()} CUDA device(s)."
+            )
+        else:
+            device = requested_device
+    else:
+        device = requested_device
 
     train_loader, val_loader, classes, num_classes = build_dataloaders(cfg)
     n_val = len(val_loader.dataset) if val_loader is not None else 0
     logger.info(f"[data] train={len(train_loader.dataset)} val={n_val} classes={len(classes)} (nc={num_classes})")
 
     if cfg.nc != num_classes:
-        logger.warning(f"cfg.nc={cfg.nc} != num_classes từ dữ liệu={num_classes}. "
-                       f"Sẽ dùng nc={cfg.nc} theo config.")
+        raise ValueError(
+            f"Head nc={cfg.nc} nhưng dataset có {num_classes} classes. "
+            "Dừng sớm để tránh label/head mismatch."
+        )
 
     # ---- Model ----
     model = build_finetune_model(cfg).to(device)
@@ -329,60 +382,101 @@ def run_finetune(cfg: FinetuneConfig):
         tb_logger.log_hparams(cfg)
 
     # ---- AMP ----
-    use_amp = cfg.amp and device.startswith("cuda") if isinstance(device, str) else False
+    use_amp = cfg.amp and device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=True) if use_amp else None
 
     steps_per_epoch = len(train_loader)
+    if cfg.epochs <= 0:
+        raise ValueError("cfg.epochs phải > 0.")
+    if steps_per_epoch <= 0:
+        raise ValueError("train_loader rỗng.")
+
     global_step = 0
     best_val = float("inf")
 
+    # Lưu trainability gốc để Phase 2 khôi phục đúng trạng thái.
+    # Nhờ vậy các tham số cố ý freeze sẵn trong head (đặc biệt DFL) vẫn luôn frozen.
+    base_trainability = {
+        name: p.requires_grad
+        for name, p in model.named_parameters()
+    }
+
+    ema = (
+        ModelEMA(model, decay=cfg.ema_decay, warmup_updates=cfg.ema_warmup_updates)
+        if cfg.use_ema else None
+    )
+
     # ===== PHASE 1: Freeze trunk, train head =====
-    phase1_epochs = min(cfg.freeze_epochs, cfg.epochs)
-    logger.info(f"===== PHASE 1: Freeze trunk, train head ({phase1_epochs} epochs) =====")
+    phase1_epochs = min(max(cfg.freeze_epochs, 0), cfg.epochs)
 
-    for p in model.backbone.parameters():
-        p.requires_grad_(False)
-    for p in model.neck.parameters():
-        p.requires_grad_(False)
-
-    n_train_p1 = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f"[phase1] Trainable params: {n_train_p1:,}")
-
-    optimizer = build_optimizer(model, cfg, phase="frozen")
-    scheduler = build_scheduler(optimizer, cfg, steps_per_epoch,
-                                total_epochs=max(phase1_epochs, 1), warmup_epochs=cfg.warmup_epochs)
-    ema = ModelEMA(model, decay=cfg.ema_decay, warmup_updates=cfg.ema_warmup_updates) if cfg.use_ema else None
-
-    for epoch in range(phase1_epochs):
-        train_loss, global_step, best_val = train_one_epoch(
-            model, criterion, train_loader, optimizer, scheduler,
-            scaler, ema, device, cfg, epoch, global_step, best_val,
-            val_loader=val_loader, tb_logger=tb_logger,
+    if phase1_epochs > 0:
+        logger.info(
+            f"===== PHASE 1: Freeze trunk, train head ({phase1_epochs} epochs) ====="
         )
-        logger.info(f"[phase1][epoch {epoch + 1}] train_loss={train_loss:.4f} (global_step={global_step})")
 
-    # ===== PHASE 2: Full model training =====
+        for p in model.backbone.parameters():
+            p.requires_grad_(False)
+        for p in model.neck.parameters():
+            p.requires_grad_(False)
+
+        n_train_p1 = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        logger.info(f"[phase1] Trainable params: {n_train_p1:,}")
+
+        optimizer = build_optimizer(model, cfg, phase="frozen")
+        scheduler = build_scheduler(
+            optimizer, cfg, steps_per_epoch,
+            total_epochs=phase1_epochs,
+            warmup_epochs=cfg.warmup_epochs,
+        )
+
+        for epoch in range(phase1_epochs):
+            train_loss, global_step, best_val = train_one_epoch(
+                model, criterion, train_loader, optimizer, scheduler,
+                scaler, ema, device, cfg, epoch, global_step, best_val,
+                val_loader=val_loader, tb_logger=tb_logger,
+            )
+            logger.info(
+                f"[phase1][epoch {epoch + 1}] "
+                f"train_loss={train_loss:.4f} (global_step={global_step})"
+            )
+
+    # ===== PHASE 2: Restore original trainability =====
     phase2_epochs = cfg.epochs - phase1_epochs
-    logger.info(f"===== PHASE 2: Full model training ({phase2_epochs} epochs) =====")
 
-    for p in model.parameters():
-        p.requires_grad_(True)
-
-    n_train_p2 = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f"[phase2] Trainable params: {n_train_p2:,}")
-
-    optimizer = build_optimizer(model, cfg, phase="full")
-    scheduler = build_scheduler(optimizer, cfg, steps_per_epoch,
-                                total_epochs=max(phase2_epochs, 1), warmup_epochs=cfg.phase2_warmup_epochs)
-    ema = ModelEMA(model, decay=cfg.ema_decay, warmup_updates=cfg.ema_warmup_updates) if cfg.use_ema else None
-
-    for epoch in range(phase1_epochs, cfg.epochs):
-        train_loss, global_step, best_val = train_one_epoch(
-            model, criterion, train_loader, optimizer, scheduler,
-            scaler, ema, device, cfg, epoch, global_step, best_val,
-            val_loader=val_loader, tb_logger=tb_logger,
+    if phase2_epochs > 0:
+        logger.info(
+            f"===== PHASE 2: Unfreeze trunk, preserve internal freezes "
+            f"({phase2_epochs} epochs) ====="
         )
-        logger.info(f"[phase2][epoch {epoch + 1}] train_loss={train_loss:.4f} (global_step={global_step})")
+
+        for name, p in model.named_parameters():
+            p.requires_grad_(base_trainability[name])
+
+        n_train_p2 = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        n_frozen_p2 = sum(p.numel() for p in model.parameters() if not p.requires_grad)
+        logger.info(
+            f"[phase2] Trainable params: {n_train_p2:,} | "
+            f"Frozen params preserved: {n_frozen_p2:,}"
+        )
+
+        optimizer = build_optimizer(model, cfg, phase="full")
+        scheduler = build_scheduler(
+            optimizer, cfg, steps_per_epoch,
+            total_epochs=phase2_epochs,
+            warmup_epochs=cfg.phase2_warmup_epochs,
+        )
+
+        # Không reset EMA: giữ lịch sử smoothing xuyên suốt Phase 1 -> Phase 2.
+        for epoch in range(phase1_epochs, cfg.epochs):
+            train_loss, global_step, best_val = train_one_epoch(
+                model, criterion, train_loader, optimizer, scheduler,
+                scaler, ema, device, cfg, epoch, global_step, best_val,
+                val_loader=val_loader, tb_logger=tb_logger,
+            )
+            logger.info(
+                f"[phase2][epoch {epoch + 1}] "
+                f"train_loss={train_loss:.4f} (global_step={global_step})"
+            )
 
     if val_loader is not None:
         eval_model = ema.ema if ema is not None else model

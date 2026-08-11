@@ -1,9 +1,5 @@
-"""Topology helpers for MediaPipe Attention Mesh (478 landmarks).
+from src.transferLearning.config_lmk import MEDIAPIPE_NUM_LANDMARKS
 
-The first 468 entries are derived by reflecting the official canonical face
-model around x=0 and matching the exact mirrored vertex. The final ten entries
-follow the official iris refinement order (center, right, top, left, bottom).
-"""
 
 MEDIAPIPE_478_FLIP_PERMUTATION = (
     0, 1, 2, 248, 4, 5, 6, 249, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
@@ -40,14 +36,21 @@ MEDIAPIPE_478_FLIP_PERMUTATION = (
     473, 476, 475, 474, 477, 468, 471, 470, 469, 472,
 )
 
-
 def validate_flip_permutation(permutation=MEDIAPIPE_478_FLIP_PERMUTATION) -> None:
-    if len(permutation) != 478:
-        raise ValueError(f'Flip permutation phải có 478 phần tử, nhận {len(permutation)}.')
-    if set(permutation) != set(range(478)):
-        raise ValueError('Flip permutation không phải là một song ánh của [0, 478).')
-    if any(permutation[permutation[index]] != index for index in range(478)):
+    if len(permutation) != MEDIAPIPE_NUM_LANDMARKS:
+        raise ValueError(
+            f'Flip permutation phải có {MEDIAPIPE_NUM_LANDMARKS} phần tử, '
+            f'nhận {len(permutation)}.'
+        )
+    if set(permutation) != set(range(MEDIAPIPE_NUM_LANDMARKS)):
+        raise ValueError(
+            'Flip permutation không phải là một song ánh của '
+            f'[0, {MEDIAPIPE_NUM_LANDMARKS}).'
+        )
+    if any(
+        permutation[permutation[index]] != index
+        for index in range(MEDIAPIPE_NUM_LANDMARKS)
+    ):
         raise ValueError('Flip permutation phải là phép đối hợp: perm[perm[i]] == i.')
-
 
 validate_flip_permutation()

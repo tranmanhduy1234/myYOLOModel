@@ -148,17 +148,30 @@ class NMSFreeDetector(nn.Module):
             strides=tuple(cfg["strides"]),
         )
 if __name__ == "__main__":
-    m = NMSFreeDetector().to("cuda").eval()
+    m = NMSFreeDetector(
+            # nc=80,
+            # reg_max=16,
+            # backbone_w=(16, 32, 64, 128, 256),
+            # backbone_n=(2, 4, 4, 2),
+            # neck_n=1,
+            # strides=(8, 16, 32)
+        ).to("cuda").eval()
 
     n_params = sum(p.numel() for p in m.parameters())
     print(f"Total parameters: {n_params:,} ({n_params/1e6:.2f}M)")
+    def count_params(module):
+        return sum(p.numel() for p in module.parameters()) / 1e6
 
+    print(f"Backbone : {count_params(m.backbone):.3f} M")
+    print(f"Neck     : {count_params(m.neck):.3f} M")
+    print(f"Head     : {count_params(m.head):.3f} M")
+    print(f"Total    : {count_params(m):.3f} M")
     import time
     x = torch.randn(1, 3, 480, 480).to("cuda")
     # Benchmark tốc độ inference
     with torch.inference_mode():
         start = time.time()
-        for _ in range(1):
+        for _ in range(100):
             out = m(x)
         end = time.time()
     print("Inference time:", end - start)

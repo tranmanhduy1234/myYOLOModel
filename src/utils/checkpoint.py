@@ -54,4 +54,4 @@ def load_checkpoint(
 def load_model_only(path: str, model: torch.nn.Module, map_location: str = "cpu") -> None:
     """Chi nap trong so model (dung khi fine-tune / inference, khong can optimizer)."""
     ckpt = torch.load(path, map_location=map_location)
-    model.load_state_dict(ckpt["model"])
+    model.load_state_dict(ckpt["ema"])

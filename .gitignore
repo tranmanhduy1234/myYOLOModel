@@ -188,3 +188,10 @@ note.md
 CLAUDE.md
 
 setuptraining.txt
+
+cache
+cache_face_lmk_indices
+debugModel
+
+logs_face_lmk
+logs*

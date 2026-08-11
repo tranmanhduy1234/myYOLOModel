@@ -7,20 +7,14 @@ from typing import Optional
 import torch
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
+from tqdm.auto import tqdm
 
-try:
-    from .config_lmk import TrainConfig
-    from .dataset_lmk import FaceLandmarkDataModule
-    from .loss_lmk import FaceLandmarkDetectionLoss
-    from .model_lmk import FaceLmkDetector
-except ImportError:
-    from config_lmk import TrainConfig
-    from dataset_lmk import FaceLandmarkDataModule
-    from loss_lmk import FaceLandmarkDetectionLoss
-    from model_lmk import FaceLmkDetector
+from src.transferLearning.config_lmk import TrainConfig
+from src.transferLearning.dataloader_lmk import FaceLandmarkDataModule
+from src.transferLearning.loss_lmk import FaceLandmarkDetectionLoss
+from src.transferLearning.model_lmk import FaceLmkDetector
 
 logger = logging.getLogger('train_face_lmk')
-
 
 def set_seed(seed: int):
     import random
@@ -30,10 +24,9 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-
 class ModelEMA:
 
-    def __init__(self, model: nn.Module, decay: float = 0.9998, warmup_updates: int = 2000):
+    def __init__(self, model: nn.Module, decay: float, warmup_updates: int):
         import copy
         self.ema = copy.deepcopy(model).eval()
         for p in self.ema.parameters():
@@ -56,7 +49,6 @@ class ModelEMA:
     def state_dict(self):
         return self.ema.state_dict()
 
-
 class CheckpointManager:
     """Đóng gói toàn bộ logic save/load checkpoint theo 1 TrainConfig."""
 
@@ -73,12 +65,15 @@ class CheckpointManager:
             'stage': stage_name,
             'ema_updates': ema.updates if ema is not None else 0,
             'training_plan': self.cfg.checkpoint_training_plan(),
+            'model_signature': self.cfg.checkpoint_model_signature(),
         }, path)
 
     def save_periodic(self, model, optimizer, scaler, ema, epoch, global_step, best_val):
         os.makedirs(self.cfg.ckpt_dir, exist_ok=True)
-        self.save(os.path.join(self.cfg.ckpt_dir, f'ckpt_step{global_step:08d}.pt'), model, optimizer, scaler, ema, epoch, global_step, best_val)
-        self.save(os.path.join(self.cfg.ckpt_dir, 'last.pt'), model, optimizer, scaler, ema, epoch, global_step, best_val)
+        self.save(os.path.join(self.cfg.ckpt_dir, f'ckpt_step{global_step:08d}.pt'), model,
+                  optimizer, scaler, ema, epoch, global_step, best_val)
+        self.save(os.path.join(self.cfg.ckpt_dir, 'last.pt'), model, optimizer,
+                  scaler, ema, epoch, global_step, best_val)
         step_files = sorted(f for f in os.listdir(self.cfg.ckpt_dir) if f.startswith('ckpt_step') and f.endswith('.pt'))
         while len(step_files) > self.cfg.ckpt_keep_last:
             os.remove(os.path.join(self.cfg.ckpt_dir, step_files.pop(0)))
@@ -96,6 +91,19 @@ class CheckpointManager:
 
     def load(self, path, model, optimizer=None, scaler=None, ema: Optional[ModelEMA] = None, device='cpu'):
         ckpt = torch.load(path, map_location=device)
+        expected_signature = self.cfg.checkpoint_model_signature()
+        saved_signature = ckpt.get('model_signature')
+        if saved_signature is None:
+            raise ValueError(
+                'Checkpoint không có model_signature. Đây nhiều khả năng là checkpoint '
+                'landmark bbox-relative cũ và không được phép resume vào HEAD anchor-relative.'
+            )
+        if saved_signature != expected_signature:
+            raise ValueError(
+                f'Model signature trong checkpoint khác cấu hình hiện tại: '
+                f'checkpoint={saved_signature}, current={expected_signature}.'
+            )
+
         expected_plan = self.cfg.checkpoint_training_plan()
         saved_plan = ckpt.get('training_plan')
         if saved_plan is not None and saved_plan != expected_plan:
@@ -113,10 +121,7 @@ class CheckpointManager:
             ema.updates = int(ckpt.get('ema_updates', 0))
         return ckpt.get('epoch', 0), ckpt.get('global_step', 0), ckpt.get('best_val', float('inf'))
 
-
 class Trainer:
-    """Đóng gói toàn bộ vòng đời training. Chỉ cần truyền vào 1 TrainConfig."""
-
     def __init__(self, cfg: TrainConfig):
         self.cfg = cfg
         self._setup_logging()
@@ -195,7 +200,12 @@ class Trainer:
         if cfg.optimizer == 'adamw':
             return torch.optim.AdamW(param_groups, betas=cfg.betas, eps=cfg.eps, weight_decay=cfg.weight_decay)
         if cfg.optimizer == 'sgd':
-            return torch.optim.SGD(param_groups, momentum=cfg.momentum, weight_decay=cfg.weight_decay, nesterov=True)
+            return torch.optim.SGD(
+                param_groups,
+                momentum=cfg.momentum,
+                weight_decay=cfg.weight_decay,
+                nesterov=cfg.sgd_nesterov,
+            )
         raise ValueError(f'optimizer không hỗ trợ: {cfg.optimizer}')
 
     def _configure_stage(self, epoch: int, force: bool = False) -> None:
@@ -242,12 +252,21 @@ class Trainer:
         self.model.train()
         t_epoch = time.time()
         running_loss, n_steps_done = 0.0, 0
+        augmentation_counts = {}
         use_amp = cfg.amp and self.device.type == 'cuda'
         total_norm = 0.0
 
-        for step, batch in enumerate(self.train_loader):
+        train_progress = tqdm(
+            self.train_loader,
+            desc=f'Train epoch {epoch + 1}/{cfg.epochs}',
+            unit='batch',
+            dynamic_ncols=True,
+        )
+        for step, batch in enumerate(train_progress):
             lr_head, lr_trunk = self._set_stage_learning_rates(epoch, step)
             images = batch['image'].to(self.device, non_blocking=True)
+            for aug_name in batch.get('geometric_aug', []):
+                augmentation_counts[aug_name] = augmentation_counts.get(aug_name, 0) + 1
             targets = batch['targets']
             self.optimizer.zero_grad(set_to_none=True)
             with torch.autocast(device_type=self.device.type, enabled=use_amp):
@@ -278,6 +297,11 @@ class Trainer:
             self.global_step += 1
             running_loss += items['loss']
             n_steps_done += 1
+            train_progress.set_postfix(
+                loss=f"{items['loss']:.4f}",
+                lr_head=f'{lr_head:.2e}',
+                lr_trunk=f'{lr_trunk:.2e}',
+            )
 
             if self.global_step % cfg.log_loss_interval == 0:
                 logger.info(f"epoch {epoch} step {step}/{len(self.train_loader)} (global {self.global_step}) "
@@ -296,7 +320,11 @@ class Trainer:
                     self.writer.add_scalar('train/gpu_mem_gb', torch.cuda.max_memory_allocated() / 1e9, self.global_step)
 
         avg_loss = running_loss / max(n_steps_done, 1)
-        logger.info(f'== epoch {epoch} xong: loss trung bình={avg_loss:.4f}, {n_steps_done} step, {time.time() - t_epoch:.1f}s ==')
+        logger.info(
+            f'== epoch {epoch} xong: loss trung bình={avg_loss:.4f}, '
+            f'{n_steps_done} step, {time.time() - t_epoch:.1f}s | '
+            f'geometric_aug={augmentation_counts} =='
+        )
 
     @torch.no_grad()
     def _validate(self, epoch: int) -> Optional[float]:
@@ -305,12 +333,19 @@ class Trainer:
         eval_model = self.ema.ema if self.ema is not None else self.model
         eval_model.eval()
         total, n = 0.0, 0
-        for batch in self.val_loader:
+        val_progress = tqdm(
+            self.val_loader,
+            desc=f'Validate epoch {epoch + 1}/{self.cfg.epochs}',
+            unit='batch',
+            dynamic_ncols=True,
+        )
+        for batch in val_progress:
             images = batch['image'].to(self.device, non_blocking=True)
             preds = eval_model(images, return_o2m=True)
             _, items = self.loss_fn(preds, batch['targets'])
             total += items['loss']
             n += 1
+            val_progress.set_postfix(val_loss=f'{total / n:.4f}')
         val_loss = total / max(n, 1)
         logger.info(f'== epoch {epoch} validate: loss={val_loss:.4f} ({n} batch) ==')
         self.writer.add_scalar('val/loss_total', val_loss, self.global_step)
@@ -345,7 +380,6 @@ class Trainer:
         self.writer.close()
         logger.info('Training hoàn tất.')
         return self.model, self.ema
-
 
 if __name__ == '__main__':
     Trainer(TrainConfig()).fit()

@@ -45,7 +45,7 @@ class ScaleHead(nn.Module):
         for m in (self.reg_o2m, self.reg_o2o):
             nn.init.constant_(m.bias, 1.0)
 
-    def init_stride_bias(self, stride, img_size=640):
+    def init_stride_bias(self, stride, img_size=480):
         """Init bias cls theo đúng công thức chuẩn YOLOv8/v10:
         log(5 / nc / (img_size/stride)^2) - phản ánh mật độ object kỳ vọng
         khác nhau ở từng scale (P3 dày object nhỏ hơn P5 nhiều). Được
@@ -145,12 +145,12 @@ class DetectHead(nn.Module):
         o2o_reg = torch.cat(o2o_reg, 2)  # (B, 4*reg_max, A) ~ (batch size, 64, 8400)
         o2o_box = self.decode_box(o2o_reg, anchors, stride_t)  # (B, A, 4)
 
-        # if not self.training:
-        #     return {
-        #         "o2o": {"cls": o2o_cls, "box": o2o_box, "reg_raw": o2o_reg},
-        #         "anchors": anchors,
-        #         "strides": stride_t,
-        #     }
+        if not self.training:
+            return {
+                "o2o": {"cls": o2o_cls, "box": o2o_box, "reg_raw": o2o_reg},
+                "anchors": anchors,
+                "strides": stride_t,
+            }
 
         o2m_cls = torch.cat(o2m_cls, 2).transpose(1, 2)  # (B, A, nc)
         o2m_reg = torch.cat(o2m_reg, 2)  # (B, 4*reg_max, A)
