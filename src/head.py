@@ -145,12 +145,12 @@ class DetectHead(nn.Module):
         o2o_reg = torch.cat(o2o_reg, 2)  # (B, 4*reg_max, A) ~ (batch size, 64, 8400)
         o2o_box = self.decode_box(o2o_reg, anchors, stride_t)  # (B, A, 4)
 
-        if not self.training:
-            return {
-                "o2o": {"cls": o2o_cls, "box": o2o_box, "reg_raw": o2o_reg},
-                "anchors": anchors,
-                "strides": stride_t,
-            }
+        # if not self.training:
+        #     return {
+        #         "o2o": {"cls": o2o_cls, "box": o2o_box, "reg_raw": o2o_reg},
+        #         "anchors": anchors,
+        #         "strides": stride_t,
+        #     }
 
         o2m_cls = torch.cat(o2m_cls, 2).transpose(1, 2)  # (B, A, nc)
         o2m_reg = torch.cat(o2m_reg, 2)  # (B, 4*reg_max, A)

@@ -4,7 +4,6 @@ import numpy as np
 import torch
 from torchvision.ops import box_iou
 
-
 def _ap_101(recall: np.ndarray, precision: np.ndarray) -> float:
     recall = np.concatenate(([0.0], recall, [1.0]))
     precision = np.concatenate(([0.0], precision, [0.0]))
@@ -14,10 +13,7 @@ def _ap_101(recall: np.ndarray, precision: np.ndarray) -> float:
     idx = np.clip(idx, 0, len(precision) - 1)
     return float(precision[idx].mean())
 
-
 class MetricAccumulator:
-    """Gom prediction/GT của nhánh o2o qua từng batch, compute() 1 lần cuối ra map_50_95/map_50/precision/recall/per_class_ap."""
-
     def __init__(
         self,
         nc: int,
